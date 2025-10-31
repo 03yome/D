@@ -1,0 +1,63 @@
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+local pl = Players.LocalPlayer
+
+-- 🔧 Tạo tool
+local tool = Instance.new("Tool")
+tool.Name = "NameFinder"
+tool.RequiresHandle = false
+tool.Parent = pl:WaitForChild("Backpack")
+
+-- 🧠 Hàm thông báo
+local function notify(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = duration or 3
+        })
+    end)
+end
+
+-- 💬 Hàm hiển BillboardGui trên part
+local function showBillboard(target, text, time)
+    if not target or not target:IsA("BasePart") then return end
+    local bb = Instance.new("BillboardGui")
+    bb.Adornee = target
+    bb.Size = UDim2.new(0, 200, 0, 50)
+    bb.StudsOffset = Vector3.new(0, target.Size.Y + 0.5, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = target
+
+    local label = Instance.new("TextLabel", bb)
+    label.Size = UDim2.fromScale(1, 1)
+    label.BackgroundTransparency = 0.3
+    label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.Font = Enum.Font.GothamBold
+    label.TextScaled = true
+    label.Text = text
+
+    task.delay(time or 3, function()
+        if bb and bb.Parent then bb:Destroy() end
+    end)
+end
+
+-- 🖱️ Khi trang bị tool
+tool.Equipped:Connect(function(mouse)
+    notify("NameFinder", "Click vào một part để xem tên", 3)
+
+    mouse.Button1Down:Connect(function()
+        local target = mouse.Target
+        if target then
+            local name = target.Name
+            local full = target:GetFullName()
+            local pos = target.Position
+            notify("Part: " .. name, "Path: " .. full, 5)
+            showBillboard(target, name, 4)
+            print("[NameFinder] " .. full .. " | Position: " .. tostring(pos))
+        else
+            notify("NameFinder", "Không có part nào được chọn", 2)
+        end
+    end)
+end)
