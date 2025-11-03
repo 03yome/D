@@ -1,0 +1,104 @@
+-- GUI Scanner: logs any ScreenGui that was NOT present at start
+-- Paste into executor or a LocalScript and run.
+
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+-- Where to watch: CoreGui, PlayerGui, and hidden GUI container (if executor provides)
+local function get_hidden_container()
+    if type(gethui) == "function" then
+        local ok, ret = pcall(gethui)
+        if ok and ret then return ret end
+    end
+    if type(get_hidden_gui) == "function" then
+        local ok, ret = pcall(get_hidden_gui)
+        if ok and ret then return ret end
+    end
+    if _G.get_hidden_gui then
+        return _G.get_hidden_gui
+    end
+    return nil
+end
+
+local containers = {}
+table.insert(containers, game:GetService("CoreGui"))
+table.insert(containers, LocalPlayer:WaitForChild("PlayerGui"))
+local hidden = get_hidden_container()
+if hidden then table.insert(containers, hidden) end
+
+-- store known guis by their unique identity (use Instance as key)
+local known = {}
+local function snapshot_initial()
+    for _, parent in ipairs(containers) do
+        local ok, children = pcall(function() return parent:GetChildren() end)
+        if ok and children then
+            for _, inst in ipairs(children) do
+                if inst:IsA("ScreenGui") then
+                    known[inst] = true
+                end
+            end
+        end
+    end
+end
+
+-- utility: safe get full name
+local function safeFullName(inst)
+    local ok, name = pcall(function() return inst:GetFullName() end)
+    if ok and name then return name end
+    return tostring(inst)
+end
+
+-- notify helper (best-effort)
+local function notify(title, text, dur)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {Title = title or "GUI Scanner"; Text = text or ""; Duration = dur or 4})
+    end)
+end
+
+-- initialize
+snapshot_initial()
+print("[GUI Scanner] Initialized. Scanning for new ScreenGui...")
+
+local running = true
+-- expose stop function
+_G.StopGuiScanner = function()
+    running = false
+    print("[GUI Scanner] Stopped.")
+end
+
+-- main loop: poll every interval seconds
+local interval = 1.0 -- seconds (adjust if you want faster/slower)
+
+task.spawn(function()
+    while running do
+        -- refresh container list in case environment changed
+        containers = { game:GetService("CoreGui"), LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui") }
+        local h = get_hidden_container()
+        if h then containers[#containers+1] = h end
+
+        for _, parent in ipairs(containers) do
+            local ok, children = pcall(function() return parent:GetChildren() end)
+            if ok and children then
+                for _, inst in ipairs(children) do
+                    if inst and inst:IsA("ScreenGui") then
+                        if not known[inst] then
+                            known[inst] = true
+                            local fullname = safeFullName(inst)
+                            local name = tostring(inst.Name)
+                            -- print & notify
+                            print(string.format("[GUI Scanner] New ScreenGui detected: Name=\"%s\" | FullPath=\"%s\"", name, fullname))
+                            notify("New GUI detected", name .. "\n" .. fullname, 5)
+                        end
+                    end
+                end
+            end
+        end
+
+        task.wait(interval)
+    end
+end)
+
+-- quick info to user
+print('[GUI Scanner] Running. To stop: _G.StopGuiScanner()')
