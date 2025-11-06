@@ -1,0 +1,58 @@
+-- 🧱 Cấu hình cơ bản
+local player = game.Players.LocalPlayer
+local localp = player:WaitForChild("PlayerGui")
+local tef = Enum.Font.SourceSansBold
+local blak = Color3.fromRGB(0, 0, 0)
+local rede = Color3.fromRGB(255, 0, 0)
+local whit = Color3.fromRGB(255, 255, 255)
+
+-- 🟢 Tạo ScreenGui chứa nút
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "FloatingPadGUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = localp
+
+-- 🟢 Tạo nút
+local button = Instance.new("TextButton")
+button.Parent = screenGui
+button.BackgroundColor3 = blak
+button.BorderColor3 = rede
+button.BorderSizePixel = 3
+button.Name = "Floating Pad"
+button.Position = UDim2.new(0, 300, 0, 5)
+button.Size = UDim2.new(0.499, 0, 0, 30)
+button.ZIndex = 2
+button.Font = tef
+button.TextSize = 14
+button.Text = "Floating Pad"
+button.TextColor3 = whit
+button.TextWrapped = true
+
+-- 🔵 Khi nhấn nút
+button.MouseButton1Down:Connect(function()
+	local char = player.Character or player.CharacterAdded:Wait()
+	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+	if not torso then return end
+
+	-- Xóa pad cũ nếu có
+	local oldPad = workspace:FindFirstChild("FloatingPad_" .. player.Name)
+	if oldPad then oldPad:Destroy() end
+
+	-- Tạo pad bay
+	local pad = Instance.new("Part")
+	pad.Name = "FloatingPad_" .. player.Name
+	pad.Parent = workspace
+	pad.Anchored = true
+	pad.Locked = true
+	pad.BrickColor = BrickColor.new("Institutional white")
+	pad.Size = Vector3.new(8, 1.2, 8)
+
+	local mesh = Instance.new("CylinderMesh", pad)
+	mesh.Scale = Vector3.new(1, 0.5, 1)
+
+	-- Cập nhật vị trí pad theo người chơi
+	while task.wait() do
+		if not torso or not torso.Parent then break end
+		pad.CFrame = torso.CFrame * CFrame.new(0, -4, 0)
+	end
+end)
