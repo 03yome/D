@@ -1,63 +1,107 @@
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
 local pl = Players.LocalPlayer
+local cam = workspace.CurrentCamera
 
--- 🔧 Tạo tool
+-- 🧹 Xóa tool trùng tên
+for _, t in ipairs(pl.Backpack:GetChildren()) do
+	if t.Name == "NameFinder" then t:Destroy() end
+end
+if pl.Character then
+	for _, t in ipairs(pl.Character:GetChildren()) do
+		if t:IsA("Tool") and t.Name == "NameFinder" then
+			t:Destroy()
+		end
+	end
+end
+
+-- 🧰 Tạo tool
 local tool = Instance.new("Tool")
 tool.Name = "NameFinder"
 tool.RequiresHandle = false
 tool.Parent = pl:WaitForChild("Backpack")
 
--- 🧠 Hàm thông báo
+-- 🧠 Notify
 local function notify(title, text, duration)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = title,
-            Text = text,
-            Duration = duration or 3
-        })
-    end)
+	pcall(function()
+		StarterGui:SetCore("SendNotification", {
+			Title = title,
+			Text = text,
+			Duration = duration or 3
+		})
+	end)
 end
 
--- 💬 Hàm hiển BillboardGui trên part
+-- 🪧 Billboard hiển thị tên part
 local function showBillboard(target, text, time)
-    if not target or not target:IsA("BasePart") then return end
-    local bb = Instance.new("BillboardGui")
-    bb.Adornee = target
-    bb.Size = UDim2.new(0, 200, 0, 50)
-    bb.StudsOffset = Vector3.new(0, target.Size.Y + 0.5, 0)
-    bb.AlwaysOnTop = true
-    bb.Parent = target
+	if not target or not target:IsA("BasePart") then return end
+	local old = target:FindFirstChild("NameFinderGui")
+	if old then old:Destroy() end
 
-    local label = Instance.new("TextLabel", bb)
-    label.Size = UDim2.fromScale(1, 1)
-    label.BackgroundTransparency = 0.3
-    label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    label.Font = Enum.Font.GothamBold
-    label.TextScaled = true
-    label.Text = text
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "NameFinderGui"
+	bb.Adornee = target
+	bb.Size = UDim2.new(0, 200, 0, 50)
+	bb.StudsOffset = Vector3.new(0, target.Size.Y + 0.5, 0)
+	bb.AlwaysOnTop = true
+	bb.Parent = target
 
-    task.delay(time or 3, function()
-        if bb and bb.Parent then bb:Destroy() end
-    end)
+	local label = Instance.new("TextLabel", bb)
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 0.3
+	label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.Text = text
+
+	task.delay(time or 3, function()
+		if bb and bb.Parent then bb:Destroy() end
+	end)
+end
+
+-- 🔍 Hàm tìm part gần tia chuột nhất (bỏ qua CanQuery)
+local function findClosestPartFromMouse(mouse)
+	local origin = cam.CFrame.Position
+	local dir = (mouse.Hit.Position - origin).Unit * 1000
+	local closestPart, closestDist = nil, math.huge
+
+	for _, v in ipairs(workspace:GetDescendants()) do
+		if v:IsA("BasePart") and v ~= pl.Character and v.Transparency < 1 then
+			local pos = v.Position
+			local dist = (pos - origin):Dot(dir.Unit)
+			if dist > 0 then
+				local pointOnRay = origin + dir.Unit * dist
+				local diff = (pos - pointOnRay).Magnitude
+				if diff < (v.Size.Magnitude / 2) and dist < closestDist then
+					closestPart = v
+					closestDist = dist
+				end
+			end
+		end
+	end
+	return closestPart
 end
 
 -- 🖱️ Khi trang bị tool
 tool.Equipped:Connect(function(mouse)
-    notify("NameFinder", "Click vào một part để xem tên", 3)
+	notify("NameFinder", "Click vào part để xem tên", 3)
 
-    mouse.Button1Down:Connect(function()
-        local target = mouse.Target
-        if target then
-            local name = target.Name
-            local full = target:GetFullName()
-            local pos = target.Position
-            notify("Part: " .. name, "Path: " .. full, 5)
-            showBillboard(target, name, 4)
-            print("[NameFinder] " .. full .. " | Position: " .. tostring(pos))
-        else
-            notify("NameFinder", "Không có part nào được chọn", 2)
-        end
-    end)
+	mouse.Button1Down:Connect(function()
+		local target = mouse.Target
+		if not target then
+			target = findClosestPartFromMouse(mouse)
+		end
+
+		if target and target:IsA("BasePart") then
+			local name = target.Name
+			local full = target:GetFullName()
+			local pos = target.Position
+			notify("Part: " .. name, "Path: " .. full, 5)
+			showBillboard(target, name, 4)
+			print("[NameFinder] " .. full .. " | Position: " .. tostring(pos))
+		else
+			notify("NameFinder", "Không có part nào hợp lệ được chọn!", 2)
+		end
+	end)
 end)
