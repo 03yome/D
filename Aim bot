@@ -1,0 +1,1345 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+-- Laser Beam UI — Players & Parts pages + Weak Omega + Laser Wall + Crasher + Wall Config Page + Look-At Assist
+-- New in this drop:
+--   • Look-At Assist with prediction + smoothing (rotates HRP yaw to stare at nearest target)
+--   • "Aim Stop" is on the LEFT controls (resets everything including Look-At)
+--   • All prior features preserved and integrated.
+--
+-- Existing highlights from your version:
+--   • Tabs: Players | Parts | Wall Config
+--   • Player/Part lists (right side, 150-stud radius, scrollable)
+--   • Per-row actions: Aim 1 (GodRay), Aim 1 (2nd) VirusBone2[10], Super 3 (GodRay 10× faster), Aim 4 VirusBone1[15], Omega (0 delay)
+--   • Global: Weak Omega (Players/Parts), Laser Wall (continuous), Crasher (all players, simulated 10k/s), Aim Stop
+--   • Raycast aiming with Pierce Walls toggle + Camera/Me origin
+--   • Draggable rectangle GUI
+
+-- ========================== SERVICES & BASICS ==========================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- ============================ SETTINGS/STATE ===========================
+local RADIUS = 150
+local DELAY_AIM1 = 0.01
+local DELAY_SUPER = DELAY_AIM1 / 10 -- 0.001s (10× faster than Aim 1)
+local PART_SCAN_INTERVAL = 0.5
+local PARTS_CAP = 250
+
+local MODE_NONE, MODE_AIM1, MODE_SUPER, MODE_OMEGA = 0, 1, 2, 3
+local mode = MODE_NONE
+local firing = false
+local selectedTargetObj = nil -- Player or BasePart
+local fireDelay = DELAY_AIM1
+local accumulator = 0
+local MAX_BURSTS_PER_FRAME = 100
+local OMEGA_BURSTS_PER_FRAME = 30
+
+-- Weak Omega (contextual by tab)
+local weakOmegaPlayersOn = false
+local weakOmegaPartsOn = false
+local weakOmegaAccumulator = 0
+
+-- Laser Wall — fully configurable
+local laserWallOn = false
+local laserWallAccumulator = 0
+
+local wallSettings = {
+	mode = "Straight",     -- "Straight" | "Cone" | "Ring360"
+	beamCount = 9,         -- beams per volley
+	fireDelay = DELAY_AIM1, -- seconds between volleys when ON
+	distance = 150,        -- forward distance (Straight/Cone)
+	width = 150,           -- wall width (Straight)
+	arcDeg = 90,           -- Cone arc in degrees (0-360)
+	ringRadius = 50        -- radius for Ring360
+}
+
+-- Crasher (global) — all players in radius
+local crasherOn = false
+local CRASHER_TARGET_RATE = 10000 -- beams per second (simulated)
+local CRASHER_MAX_PER_FRAME = 600
+local crasherAccumulator = 0
+
+-- attack types for single-target modes
+local ATTACK_GODRAY    = "GodRay"
+local ATTACK_SUMMON10  = "SummonBone10"
+local ATTACK_SUMMON15  = "SummonBone15"
+local currentAttack = ATTACK_GODRAY
+
+-- Raycast options
+local pierceWalls = false
+local rayFromCamera = true
+
+-- Look-At Assist (NEW)
+local autoLookAtOn = false         -- toggle
+local lookPredictSec = 0.15        -- lead time in seconds
+local lookSmooth = 0.25            -- 0..1 smoothing intensity (scaled per frame)
+local lookToggleBtn -- fwd-declare so stopAll can update if needed
+
+-- fwd-declare so stopAll can re-enable autorotate
+local function setHumanoidAutoRotate(on)
+	local ch = LocalPlayer.Character
+	if not ch then return end
+	local hum = ch:FindFirstChildOfClass("Humanoid")
+	if hum then hum.AutoRotate = on end
+end
+
+-- =============================== GUI =================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LaserBeamUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 600, 0, 460)
+main.Position = UDim2.new(0.33, 0, 0.26, 0)
+main.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = screenGui
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 32)
+title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+title.BorderSizePixel = 0
+title.Text = "Laser Beam"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 16
+title.Parent = main
+
+-- Left controls (scrollable)
+local leftScroll = Instance.new("ScrollingFrame")
+leftScroll.Name = "LeftControls"
+leftScroll.Size = UDim2.new(0, 230, 1, -40)
+leftScroll.Position = UDim2.new(0, 0, 0, 40)
+leftScroll.BackgroundColor3 = Color3.fromRGB(36, 36, 36)
+leftScroll.BorderSizePixel = 0
+leftScroll.ScrollBarThickness = 6
+leftScroll.CanvasSize = UDim2.new(0,0,0,0)
+leftScroll.Parent = main
+
+local leftLayout = Instance.new("UIListLayout")
+leftLayout.Padding = UDim.new(0, 8)
+leftLayout.Parent = leftScroll
+
+local function mkLabel(text, height, bold)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Size = UDim2.new(1, -20, 0, height or 22)
+	l.Position = UDim2.new(0, 10, 0, 0)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Text = text
+	l.TextColor3 = Color3.fromRGB(220, 220, 220)
+	l.Font = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
+	l.TextSize = 14
+	l.Parent = leftScroll
+	return l
+end
+local function mkBtn(text, color)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -20, 0, 30)
+	b.Position = UDim2.new(0, 10, 0, 0)
+	b.BackgroundColor3 = color or Color3.fromRGB(90, 90, 90)
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(255,255,255)
+	b.Font = Enum.Font.SourceSansBold
+	b.TextSize = 16
+	b.Parent = leftScroll
+	return b
+end
+local function mkLeftInput(placeholder, default)
+	local tb = Instance.new("TextBox")
+	tb.Size = UDim2.new(1, -20, 0, 28)
+	tb.Position = UDim2.new(0, 10, 0, 0)
+	tb.BackgroundColor3 = Color3.fromRGB(55,55,55)
+	tb.BorderSizePixel = 0
+	tb.PlaceholderText = placeholder
+	tb.Text = tostring(default or "")
+	tb.TextColor3 = Color3.fromRGB(255,255,255)
+	tb.Font = Enum.Font.SourceSans
+	tb.TextSize = 14
+	tb.ClearTextOnFocus = false
+	tb.Parent = leftScroll
+	return tb
+end
+
+-- LEFT: Aim Stop at the top (as requested)
+local aimStop = mkBtn("Aim Stop", Color3.fromRGB(200,55,55))
+local status = mkLabel("Target: none", 20, false)
+mkLabel("Players/Parts within 150 studs", 18, false)
+local pierceBtn = mkBtn("Pierce Walls: OFF", Color3.fromRGB(90,90,90))
+local originBtn = mkBtn("Ray Origin: Camera", Color3.fromRGB(90,90,90))
+
+-- Look-At Assist UI (NEW)
+mkLabel("Look-At Assist", 18, true)
+lookToggleBtn = mkBtn("Auto LookAt: OFF", Color3.fromRGB(90,90,90))
+mkLabel("Prediction (sec)", 18, false)
+local lookPredictBox = mkLeftInput("0.15", lookPredictSec)
+mkLabel("Smooth (0-1)", 18, false)
+local lookSmoothBox = mkLeftInput("0.25", lookSmooth)
+local lookApplyBtn = mkBtn("Apply Look-At Settings", Color3.fromRGB(90,120,180))
+
+local function refreshLeftScrollHeight()
+	leftScroll.CanvasSize = UDim2.new(0,0,0,leftLayout.AbsoluteContentSize.Y + 20)
+end
+leftLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(refreshLeftScrollHeight)
+task.defer(refreshLeftScrollHeight)
+
+-- RIGHT: tab strip + global toggles (wider to fit Wall tab)
+local rightTop = Instance.new("Frame")
+rightTop.Size = UDim2.new(0, 610, 0, 30)
+rightTop.Position = UDim2.new(1, -610, 0, 40)
+rightTop.BackgroundColor3 = Color3.fromRGB(40,40,40)
+rightTop.BorderSizePixel = 0
+rightTop.Parent = main
+
+local function mkTopTab(text, x)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, 80, 1, -6)
+	b.Position = UDim2.new(0, x, 0, 3)
+	b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(255,255,255)
+	b.Font = Enum.Font.SourceSansBold
+	b.TextSize = 14
+	b.Parent = rightTop
+	return b
+end
+
+local playersTab   = mkTopTab("Players",   5)
+local partsTab     = mkTopTab("Parts",     90)
+local wallTab      = mkTopTab("Wall Config",175)
+
+local weakOmegaBtn = mkTopTab("Weak Ω: OFF",260)
+weakOmegaBtn.Size = UDim2.new(0, 90, 1, -6)
+
+local laserWallBtn = mkTopTab("Wall: OFF",355)
+laserWallBtn.Size = UDim2.new(0, 80, 1, -6)
+
+local crasherBtn   = mkTopTab("Crasher: OFF",440)
+crasherBtn.Size = UDim2.new(0, 90, 1, -6)
+
+-- Right pages
+local playerList = Instance.new("ScrollingFrame")
+playerList.Name = "PlayerList"
+playerList.Size = UDim2.new(0, 350, 1, -76)
+playerList.Position = UDim2.new(1, -350, 0, 76)
+playerList.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+playerList.BorderSizePixel = 0
+playerList.ScrollBarThickness = 6
+playerList.CanvasSize = UDim2.new()
+playerList.Parent = main
+
+local playerLayout = Instance.new("UIListLayout")
+playerLayout.Padding = UDim.new(0, 4)
+playerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+playerLayout.Parent = playerList
+
+local partList = Instance.new("ScrollingFrame")
+partList.Name = "PartList"
+partList.Size = playerList.Size
+partList.Position = playerList.Position
+partList.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+partList.BorderSizePixel = 0
+partList.ScrollBarThickness = 6
+partList.CanvasSize = UDim2.new()
+partList.Visible = false
+partList.Parent = main
+
+local partLayout = Instance.new("UIListLayout")
+partLayout.Padding = UDim.new(0, 4)
+partLayout.SortOrder = Enum.SortOrder.LayoutOrder
+partLayout.Parent = partList
+
+-- Wall Config page (right side panel)
+local wallPage = Instance.new("ScrollingFrame")
+wallPage.Name = "WallConfig"
+wallPage.Size = playerList.Size
+wallPage.Position = playerList.Position
+wallPage.BackgroundColor3 = Color3.fromRGB(40,40,40)
+wallPage.BorderSizePixel = 0
+wallPage.ScrollBarThickness = 6
+wallPage.Visible = false
+wallPage.Parent = main
+
+local wallLayout = Instance.new("UIListLayout")
+wallLayout.Padding = UDim.new(0, 8)
+wallLayout.SortOrder = Enum.SortOrder.LayoutOrder
+wallLayout.Parent = wallPage
+
+local function mkRowLabel(parent, text)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Size = UDim2.new(1, -16, 0, 22)
+	l.Position = UDim2.new(0, 8, 0, 0)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Text = text
+	l.TextColor3 = Color3.fromRGB(230,230,230)
+	l.Font = Enum.Font.SourceSansBold
+	l.TextSize = 14
+	l.Parent = parent
+	return l
+end
+local function mkInput(parent, placeholder, default)
+	local tb = Instance.new("TextBox")
+	tb.Size = UDim2.new(1, -16, 0, 28)
+	tb.Position = UDim2.new(0, 8, 0, 0)
+	tb.BackgroundColor3 = Color3.fromRGB(55,55,55)
+	tb.BorderSizePixel = 0
+	tb.PlaceholderText = placeholder
+	tb.Text = tostring(default or "")
+	tb.TextColor3 = Color3.fromRGB(255,255,255)
+	tb.Font = Enum.Font.SourceSans
+	tb.TextSize = 14
+	tb.ClearTextOnFocus = false
+	tb.Parent = parent
+	return tb
+end
+local function mkSmallBtn(parent, text)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0.5, -12, 0, 30)
+	b.Position = UDim2.new(0, 8, 0, 0)
+	b.BackgroundColor3 = Color3.fromRGB(90,90,90)
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(255,255,255)
+	b.Font = Enum.Font.SourceSansBold
+	b.TextSize = 14
+	b.Parent = parent
+	return b
+end
+local function mkRowFrame(parent)
+	local f = Instance.new("Frame")
+	f.BackgroundTransparency = 1
+	f.Size = UDim2.new(1, 0, 0, 30)
+	f.Parent = parent
+	return f
+end
+
+mkRowLabel(wallPage, "Wall Mode:")
+local modeBtn = mkSmallBtn(wallPage, "Straight")
+modeBtn.Size = UDim2.new(1, -16, 0, 30)
+modeBtn.Position = UDim2.new(0, 8, 0, 0)
+
+mkRowLabel(wallPage, "Beam Count (1-200):")
+local countBox = mkInput(wallPage, "e.g. 9", 9)
+
+mkRowLabel(wallPage, "Fire Delay seconds (0.0005 - 1):")
+local delayBox = mkInput(wallPage, "e.g. 0.01", DELAY_AIM1)
+
+mkRowLabel(wallPage, "Distance (Straight/Cone):")
+local distBox = mkInput(wallPage, "e.g. 150", 150)
+
+mkRowLabel(wallPage, "Width (Straight):")
+local widthBox = mkInput(wallPage, "e.g. 150", 150)
+
+mkRowLabel(wallPage, "Cone Arc Degrees (0-360):")
+local arcBox = mkInput(wallPage, "e.g. 90", 90)
+
+mkRowLabel(wallPage, "Ring Radius (Ring360):")
+local ringBox = mkInput(wallPage, "e.g. 50", 50)
+
+-- Apply & Fire Once buttons
+local dual = mkRowFrame(wallPage)
+dual.Size = UDim2.new(1, 0, 0, 34)
+local applyBtn = mkSmallBtn(dual, "Apply")
+applyBtn.Position = UDim2.new(0,8,0,2)
+local fireOnceBtn = mkSmallBtn(dual, "Fire Once")
+fireOnceBtn.Position = UDim2.new(0.5,4,0,2)
+
+wallLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	wallPage.CanvasSize = UDim2.new(0,0,0,wallLayout.AbsoluteContentSize.Y + 12)
+end)
+
+-- Tab switching
+local currentTab = "Players"
+local function refreshWeakButtonVisual()
+	if currentTab == "Players" then
+		weakOmegaBtn.Text = "Weak Ω: " .. (weakOmegaPlayersOn and "ON" or "OFF")
+	else
+		weakOmegaBtn.Text = "Weak Ω: " .. (weakOmegaPartsOn and "ON" or "OFF")
+	end
+	weakOmegaBtn.BackgroundColor3 = ((currentTab=="Players" and weakOmegaPlayersOn) or (currentTab=="Parts" and weakOmegaPartsOn))
+		and Color3.fromRGB(60,160,80) or Color3.fromRGB(60,60,60)
+end
+local function refreshLaserWallVisual()
+	laserWallBtn.Text = "Wall: " .. (laserWallOn and "ON" or "OFF")
+	laserWallBtn.BackgroundColor3 = laserWallOn and Color3.fromRGB(60,160,80) or Color3.fromRGB(60,60,60)
+end
+local function refreshCrasherVisual()
+	crasherBtn.Text = "Crasher: " .. (crasherOn and "ON" or "OFF")
+	crasherBtn.BackgroundColor3 = crasherOn and Color3.fromRGB(200,50,50) or Color3.fromRGB(60,60,60)
+end
+
+local function showPage(which)
+	currentTab = which
+	playerList.Visible = (which == "Players")
+	partList.Visible   = (which == "Parts")
+	wallPage.Visible   = (which == "Wall")
+	playersTab.BackgroundColor3 = (which=="Players") and Color3.fromRGB(90,90,90) or Color3.fromRGB(60,60,60)
+	partsTab.BackgroundColor3   = (which=="Parts")   and Color3.fromRGB(90,90,90) or Color3.fromRGB(60,60,60)
+	wallTab.BackgroundColor3    = (which=="Wall")    and Color3.fromRGB(90,90,90) or Color3.fromRGB(60,60,60)
+	refreshWeakButtonVisual()
+	refreshLaserWallVisual()
+	refreshCrasherVisual()
+end
+playersTab.MouseButton1Click:Connect(function() showPage("Players") end)
+partsTab.MouseButton1Click:Connect(function() showPage("Parts") end)
+wallTab.MouseButton1Click:Connect(function() showPage("Wall") end)
+
+-- ============================ UTILITIES ==============================
+local function getGodRayRemote()
+	local tool = LocalPlayer.Backpack:FindFirstChild("GodRay[100]") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("GodRay[100]"))
+	if tool then
+		local r = tool:FindFirstChild("Getpos")
+		if r and r:IsA("RemoteEvent") then return r end
+	end
+	return nil
+end
+local function getSummon10Remote()
+	local tool = LocalPlayer.Backpack:FindFirstChild("VirusBone2[10]") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("VirusBone2[10]"))
+	if tool then
+		local r = tool:FindFirstChild("SummonBone")
+		if r and r:IsA("RemoteEvent") then return r end
+	end
+	return nil
+end
+local function getSummon15Remote()
+	local tool = LocalPlayer.Backpack:FindFirstChild("VirusBone1[15]") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("VirusBone1[15]"))
+	if tool then
+		local r = tool:FindFirstChild("SummonBone")
+		if r and r:IsA("RemoteEvent") then return r end
+	end
+	return nil
+end
+local function getRemote()
+	if currentAttack == "SummonBone10" then
+		return getSummon10Remote()
+	elseif currentAttack == "SummonBone15" then
+		return getSummon15Remote()
+	else
+		return getGodRayRemote()
+	end
+end
+local function getMyHRP()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- Raycast helpers
+local function computeHitPos(targetPart)
+	local origin
+	if rayFromCamera and Camera then
+		origin = Camera.CFrame.Position
+	else
+		local myHRP = getMyHRP()
+		origin = myHRP and myHRP.Position or (Camera and Camera.CFrame.Position) or Vector3.new()
+	end
+	if pierceWalls then
+		return targetPart.Position
+	end
+	local dir = (targetPart.Position - origin)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	params.FilterDescendantsInstances = { LocalPlayer.Character }
+	local result = workspace:Raycast(origin, dir, params)
+	return result and result.Position or targetPart.Position
+end
+local function computeTowardPosition(targetPosition)
+	local origin
+	if rayFromCamera and Camera then
+		origin = Camera.CFrame.Position
+	else
+		local myHRP = getMyHRP()
+		origin = myHRP and myHRP.Position or (Camera and Camera.CFrame.Position) or Vector3.new()
+	end
+	if pierceWalls then
+		return targetPosition
+	end
+	local dir = (targetPosition - origin)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Blacklist
+	params.FilterDescendantsInstances = { LocalPlayer.Character }
+	local result = workspace:Raycast(origin, dir, params)
+	return result and result.Position or targetPosition
+end
+
+-- Nearest player HRP within radius (for Look-At)
+local function getNearestEnemyHRP()
+	local myHRP = getMyHRP()
+	if not myHRP then return nil end
+	local nearest, bestDist2 = nil, math.huge
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				local d = (myHRP.Position - hrp.Position).Magnitude
+				if d <= RADIUS then
+					local d2 = d*d
+					if d2 < bestDist2 then
+						bestDist2 = d2
+						nearest = hrp
+					end
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+local function stopAll()
+	firing = false
+	selectedTargetObj = nil
+	mode = MODE_NONE
+	currentAttack = ATTACK_GODRAY
+	weakOmegaPlayersOn = false
+	weakOmegaPartsOn = false
+	laserWallOn = false
+	crasherOn = false
+	-- also kill Look-At
+	autoLookAtOn = false
+	setHumanoidAutoRotate(true)
+	if lookToggleBtn then
+		lookToggleBtn.Text = "Auto LookAt: OFF"
+		lookToggleBtn.BackgroundColor3 = Color3.fromRGB(90,90,90)
+	end
+	status.Text = "Target: none"
+end
+
+-- ============================ TOGGLES ================================
+aimStop.MouseButton1Click:Connect(stopAll)
+pierceBtn.MouseButton1Click:Connect(function()
+	pierceWalls = not pierceWalls
+	pierceBtn.Text = "Pierce Walls: " .. (pierceWalls and "ON" or "OFF")
+	pierceBtn.BackgroundColor3 = pierceWalls and Color3.fromRGB(60,160,80) or Color3.fromRGB(90,90,90)
+end)
+originBtn.MouseButton1Click:Connect(function()
+	rayFromCamera = not rayFromCamera
+	originBtn.Text = "Ray Origin: " .. (rayFromCamera and "Camera" or "Me")
+end)
+
+-- Look-At button + settings
+lookToggleBtn.MouseButton1Click:Connect(function()
+	autoLookAtOn = not autoLookAtOn
+	lookToggleBtn.Text = "Auto LookAt: " .. (autoLookAtOn and "ON" or "OFF")
+	lookToggleBtn.BackgroundColor3 = autoLookAtOn and Color3.fromRGB(60,160,80) or Color3.fromRGB(90,90,90)
+	setHumanoidAutoRotate(not autoLookAtOn)
+	if autoLookAtOn then
+		status.Text = string.format("Look-At ON (lead %.3fs)", lookPredictSec)
+	else
+		status.Text = "Look-At OFF"
+	end
+end)
+lookApplyBtn.MouseButton1Click:Connect(function()
+	local p = tonumber(lookPredictBox.Text) or lookPredictSec
+	local s = tonumber(lookSmoothBox.Text) or lookSmooth
+	lookPredictSec = math.clamp(p, 0, 1)
+	lookSmooth = math.clamp(s, 0.01, 1)
+	status.Text = string.format("Look-At tuned: lead %.3fs, smooth %.2f", lookPredictSec, lookSmooth)
+end)
+LocalPlayer.CharacterAdded:Connect(function()
+	if autoLookAtOn then
+		task.defer(function() setHumanoidAutoRotate(false) end)
+	end
+end)
+
+weakOmegaBtn.MouseButton1Click:Connect(function()
+	-- exclusive
+	firing = false
+	selectedTargetObj = nil
+	mode = MODE_NONE
+	laserWallOn = false
+	crasherOn = false
+	refreshLaserWallVisual()
+	refreshCrasherVisual()
+
+	if currentTab == "Players" then
+		weakOmegaPlayersOn = not weakOmegaPlayersOn
+		weakOmegaPartsOn = false
+	else
+		weakOmegaPartsOn = not weakOmegaPartsOn
+		weakOmegaPlayersOn = false
+	end
+	weakOmegaAccumulator = 0
+	refreshWeakButtonVisual()
+	status.Text = (weakOmegaPlayersOn or weakOmegaPartsOn) and "Weak Omega active" or "Target: none"
+end)
+
+laserWallBtn.MouseButton1Click:Connect(function()
+	-- exclusive
+	firing = false
+	selectedTargetObj = nil
+	mode = MODE_NONE
+	weakOmegaPlayersOn = false
+	weakOmegaPartsOn = false
+	crasherOn = false
+	refreshWeakButtonVisual()
+	refreshCrasherVisual()
+
+	laserWallOn = not laserWallOn
+	laserWallAccumulator = 0
+	refreshLaserWallVisual()
+	status.Text = laserWallOn and "Laser Wall active" or "Target: none"
+end)
+
+crasherBtn.MouseButton1Click:Connect(function()
+	-- exclusive
+	firing = false
+	selectedTargetObj = nil
+	mode = MODE_NONE
+	weakOmegaPlayersOn = false
+	weakOmegaPartsOn = false
+	laserWallOn = false
+	refreshWeakButtonVisual()
+	refreshLaserWallVisual()
+
+	crasherOn = not crasherOn
+	crasherAccumulator = 0
+	refreshCrasherVisual()
+	status.Text = crasherOn and "Crasher active (all players)" or "Target: none"
+end)
+
+-- ========================= PLAYER LIST ==============================
+local rowsByUserId = {}
+local currentButtons = nil -- open action pane
+
+local function hideRowButtons()
+	if currentButtons and currentButtons.Visible ~= nil then
+		currentButtons.Visible = false
+	end
+	currentButtons = nil
+end
+
+local function makePlayerRow(player)
+	local rowHeight = 64
+	local row = Instance.new("Frame")
+	row.Name = "P_"..tostring(player.UserId)
+	row.Size = UDim2.new(1, -10, 0, rowHeight)
+	row.BackgroundColor3 = Color3.fromRGB(62, 62, 62)
+	row.Parent = playerList
+
+	local nameBtn = Instance.new("TextButton")
+	nameBtn.Size = UDim2.new(1, -170, 1, 0)
+	nameBtn.BackgroundTransparency = 1
+	nameBtn.TextXAlignment = Enum.TextXAlignment.Left
+	nameBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	nameBtn.Font = Enum.Font.SourceSans
+	nameBtn.TextSize = 14
+	nameBtn.Text = player.Name
+	nameBtn.Parent = row
+
+	local actionsScroll = Instance.new("ScrollingFrame")
+	actionsScroll.Name = "Actions"
+	actionsScroll.Size = UDim2.new(0, 160, 1, -6)
+	actionsScroll.Position = UDim2.new(1, -160, 0, 3)
+	actionsScroll.BackgroundTransparency = 1
+	actionsScroll.ScrollBarThickness = 4
+	actionsScroll.Visible = false
+	actionsScroll.Parent = row
+
+	local colLayout = Instance.new("UIListLayout")
+	colLayout.Padding = UDim.new(0, 4)
+	colLayout.FillDirection = Enum.FillDirection.Vertical
+	colLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	colLayout.Parent = actionsScroll
+
+	local function mkAction(text, rgb)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(1, 0, 0, 24)
+		b.BackgroundColor3 = rgb
+		b.Text = text
+		b.TextColor3 = Color3.fromRGB(255,255,255)
+		b.Font = Enum.Font.SourceSansBold
+		b.TextSize = 14
+		b.Parent = actionsScroll
+		return b
+	end
+
+	local aimBtn   = mkAction("Aim 1",       Color3.fromRGB(100,120,220))
+	local aim2Btn  = mkAction("Aim 1 (2nd)", Color3.fromRGB(140, 70,200))
+	local superBtn = mkAction("Super 3",     Color3.fromRGB(220,120, 60))
+	local aim4Btn  = mkAction("Aim 4",       Color3.fromRGB( 80,180,110))
+	local omegaBtn = mkAction("Omega",       Color3.fromRGB(200, 50, 50))
+
+	nameBtn.MouseButton1Click:Connect(function()
+		if currentButtons ~= actionsScroll then
+			hideRowButtons()
+			actionsScroll.Visible = true
+			currentButtons = actionsScroll
+			actionsScroll.CanvasSize = UDim2.new(0,0,0,colLayout.AbsoluteContentSize.Y + 4)
+		else
+			hideRowButtons()
+		end
+	end)
+
+	local function selectPlayerMode(attack, m, delay, label)
+		weakOmegaPlayersOn = false
+		weakOmegaPartsOn = false
+		laserWallOn = false
+		crasherOn = false
+		refreshWeakButtonVisual()
+		refreshLaserWallVisual()
+		refreshCrasherVisual()
+		selectedTargetObj = player
+		currentAttack = attack
+		mode = m
+		fireDelay = delay
+		firing = true
+		accumulator = 0
+		status.Text = label
+	end
+
+	aimBtn.MouseButton1Click:Connect(function()
+		selectPlayerMode(ATTACK_GODRAY, MODE_AIM1, DELAY_AIM1,
+			string.format("Target: %s (GodRay Aim 1, %s, from %s)", player.Name, pierceWalls and "Pierce" or "Blocked", rayFromCamera and "Camera" or "Me"))
+	end)
+	aim2Btn.MouseButton1Click:Connect(function()
+		selectPlayerMode(ATTACK_SUMMON10, MODE_AIM1, DELAY_AIM1,
+			string.format("Target: %s (SummonBone[10] Aim 1, %s, from %s)", player.Name, pierceWalls and "Pierce" or "Blocked", rayFromCamera and "Camera" or "Me"))
+	end)
+	superBtn.MouseButton1Click:Connect(function()
+		selectPlayerMode(ATTACK_GODRAY, MODE_SUPER, DELAY_SUPER,
+			string.format("Target: %s (GodRay Super 3, %s, from %s)", player.Name, pierceWalls and "Pierce" or "Blocked", rayFromCamera and "Camera" or "Me"))
+	end)
+	aim4Btn.MouseButton1Click:Connect(function()
+		selectPlayerMode(ATTACK_SUMMON15, MODE_AIM1, DELAY_AIM1,
+			string.format("Target: %s (SummonBone[15] Aim 4, %s, from %s)", player.Name, pierceWalls and "Pierce" or "Blocked", rayFromCamera and "Camera" or "Me"))
+	end)
+	omegaBtn.MouseButton1Click:Connect(function()
+		selectPlayerMode(ATTACK_GODRAY, MODE_OMEGA, 0,
+			string.format("Target: %s (GodRay OMEGA 0-delay, %s, from %s)", player.Name, pierceWalls and "Pierce" or "Blocked", rayFromCamera and "Camera" or "Me"))
+	end)
+
+	rowsByUserId[player.UserId] = row
+	colLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		actionsScroll.CanvasSize = UDim2.new(0,0,0,colLayout.AbsoluteContentSize.Y + 4)
+	end)
+end
+
+local function removePlayerRow(userId)
+	local row = rowsByUserId[userId]
+	if row then
+		rowsByUserId[userId] = nil
+		row:Destroy()
+	end
+end
+
+-- ============================ PART LIST ==============================
+local partRows = {}
+local partScanAccum = 0
+
+local function makePartRow(part)
+	local rowHeight = 64
+	local row = Instance.new("Frame")
+	row.Name = "B_"..part:GetDebugId()
+	row.Size = UDim2.new(1, -10, 0, rowHeight)
+	row.BackgroundColor3 = Color3.fromRGB(62, 62, 62)
+	row.Parent = partList
+
+	local nameBtn = Instance.new("TextButton")
+	nameBtn.Size = UDim2.new(1, -170, 1, 0)
+	nameBtn.BackgroundTransparency = 1
+	nameBtn.TextXAlignment = Enum.TextXAlignment.Left
+	nameBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	nameBtn.Font = Enum.Font.SourceSans
+	nameBtn.TextSize = 14
+	nameBtn.Text = part.Name
+	nameBtn.Parent = row
+
+	local actionsScroll = Instance.new("ScrollingFrame")
+	actionsScroll.Name = "Actions"
+	actionsScroll.Size = UDim2.new(0, 160, 1, -6)
+	actionsScroll.Position = UDim2.new(1, -160, 0, 3)
+	actionsScroll.BackgroundTransparency = 1
+	actionsScroll.ScrollBarThickness = 4
+	actionsScroll.Visible = false
+	actionsScroll.Parent = row
+
+	local colLayout = Instance.new("UIListLayout")
+	colLayout.Padding = UDim.new(0, 4)
+	colLayout.FillDirection = Enum.FillDirection.Vertical
+	colLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	colLayout.Parent = actionsScroll
+
+	local function mkAction(text, rgb)
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(1, 0, 0, 24)
+		b.BackgroundColor3 = rgb
+		b.Text = text
+		b.TextColor3 = Color3.fromRGB(255,255,255)
+		b.Font = Enum.Font.SourceSansBold
+		b.TextSize = 14
+		b.Parent = actionsScroll
+		return b
+	end
+
+	local aimBtn   = mkAction("Aim 1",       Color3.fromRGB(100,120,220))
+	local aim2Btn  = mkAction("Aim 1 (2nd)", Color3.fromRGB(140, 70,200))
+	local superBtn = mkAction("Super 3",     Color3.fromRGB(220,120, 60))
+	local aim4Btn  = mkAction("Aim 4",       Color3.fromRGB( 80,180,110))
+	local omegaBtn = mkAction("Omega",       Color3.fromRGB(200, 50, 50))
+
+	nameBtn.MouseButton1Click:Connect(function()
+		if currentButtons ~= actionsScroll then
+			if currentButtons and currentButtons.Visible then currentButtons.Visible = false end
+			actionsScroll.Visible = true
+			currentButtons = actionsScroll
+			actionsScroll.CanvasSize = UDim2.new(0,0,0,colLayout.AbsoluteContentSize.Y + 4)
+		else
+			if currentButtons then currentButtons.Visible = false end
+			currentButtons = nil
+		end
+	end)
+
+	local function selectPartMode(attack, m, delay, label)
+		weakOmegaPlayersOn = false
+		weakOmegaPartsOn = false
+		laserWallOn = false
+		crasherOn = false
+		refreshWeakButtonVisual()
+		refreshLaserWallVisual()
+		refreshCrasherVisual()
+		selectedTargetObj = part
+		currentAttack = attack
+		mode = m
+		fireDelay = delay
+		firing = true
+		accumulator = 0
+		status.Text = label
+	end
+
+	aimBtn.MouseButton1Click:Connect(function()
+		selectPartMode(ATTACK_GODRAY, MODE_AIM1, DELAY_AIM1,
+			string.format("Target Part: %s (GodRay Aim 1)", part:GetFullName()))
+	end)
+	aim2Btn.MouseButton1Click:Connect(function()
+		selectPartMode(ATTACK_SUMMON10, MODE_AIM1, DELAY_AIM1,
+			string.format("Target Part: %s (SummonBone[10] Aim 1)", part:GetFullName()))
+	end)
+	superBtn.MouseButton1Click:Connect(function()
+		selectPartMode(ATTACK_GODRAY, MODE_SUPER, DELAY_SUPER,
+			string.format("Target Part: %s (GodRay Super 3)", part:GetFullName()))
+	end)
+	aim4Btn.MouseButton1Click:Connect(function()
+		selectPartMode(ATTACK_SUMMON15, MODE_AIM1, DELAY_AIM1,
+			string.format("Target Part: %s (SummonBone[15] Aim 4)", part:GetFullName()))
+	end)
+	omegaBtn.MouseButton1Click:Connect(function()
+		selectPartMode(ATTACK_GODRAY, MODE_OMEGA, 0,
+			string.format("Target Part: %s (GodRay OMEGA 0-delay)", part:GetFullName()))
+	end)
+
+	partRows[part] = row
+	colLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+		actionsScroll.CanvasSize = UDim2.new(0,0,0,colLayout.AbsoluteContentSize.Y + 4)
+	end)
+end
+
+local function removePartRow(part)
+	local row = partRows[part]
+	if row then
+		if selectedTargetObj == part then
+			stopAll()
+		end
+		partRows[part] = nil
+		row:Destroy()
+	end
+end
+
+-- ============================ LIST REFRESH ===========================
+Players.PlayerRemoving:Connect(function(plr)
+	removePlayerRow(plr.UserId)
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+	-- Refresh players ~4x/sec
+	local myHRP = getMyHRP()
+	if myHRP then
+		local seen = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+				local hrp = plr.Character.HumanoidRootPart
+				local d = (myHRP.Position - hrp.Position).Magnitude
+				if d <= RADIUS then
+					seen[plr.UserId] = true
+					if not rowsByUserId[plr.UserId] then
+						makePlayerRow(plr)
+					end
+					local row = rowsByUserId[plr.UserId]
+					if row then
+						local nameBtn = row:FindFirstChildWhichIsA("TextButton")
+						if nameBtn then
+							nameBtn.Text = string.format("%s  (%.0f studs)", plr.Name, d)
+						end
+					end
+				end
+			end
+		end
+		for userId, _ in pairs(rowsByUserId) do
+			if not seen[userId] then
+				removePlayerRow(userId)
+			end
+		end
+		playerList.CanvasSize = UDim2.new(0, 0, 0, playerLayout.AbsoluteContentSize.Y + 10)
+	end
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+	-- Refresh parts ~2x/sec
+	partScanAccum += dt
+	if partScanAccum < PART_SCAN_INTERVAL then return end
+	partScanAccum = 0
+
+	local myHRP = getMyHRP()
+	if not myHRP then return end
+
+	local seenMark = {}
+	local count = 0
+
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst:IsA("BasePart") then
+			if not (LocalPlayer.Character and inst:IsDescendantOf(LocalPlayer.Character)) then
+				local d = (myHRP.Position - inst.Position).Magnitude
+				if d <= RADIUS then
+					seenMark[inst] = true
+					count += 1
+					if not partRows[inst] and count <= PARTS_CAP then
+						makePartRow(inst)
+					elseif partRows[inst] then
+						local row = partRows[inst]
+						if row then
+							local nameBtn = row:FindFirstChildWhichIsA("TextButton")
+							if nameBtn then
+								nameBtn.Text = string.format("%s  (%.0f studs)", inst.Name, d)
+							end
+						end
+					end
+					if count >= PARTS_CAP then break end
+				end
+			end
+		end
+	end
+
+	for part, _ in pairs(partRows) do
+		if not part.Parent or not seenMark[part] then
+			removePartRow(part)
+		end
+	end
+
+	partList.CanvasSize = UDim2.new(0, 0, 0, partLayout.AbsoluteContentSize.Y + 10)
+end)
+
+-- ============================ WALL CONFIG ============================
+local function clamp(n, lo, hi, fallback)
+	n = tonumber(n)
+	if not n then return fallback end
+	if lo and n < lo then n = lo end
+	if hi and n > hi then n = hi end
+	return n
+end
+
+local function cycleMode()
+	if wallSettings.mode == "Straight" then
+		wallSettings.mode = "Cone"
+	elseif wallSettings.mode == "Cone" then
+		wallSettings.mode = "Ring360"
+	else
+		wallSettings.mode = "Straight"
+	end
+	modeBtn.Text = wallSettings.mode
+end
+modeBtn.MouseButton1Click:Connect(cycleMode)
+
+local function applyWallSettings()
+	wallSettings.beamCount = clamp(countBox.Text, 1, 200, wallSettings.beamCount)
+	wallSettings.fireDelay = clamp(delayBox.Text, 0.0005, 1, wallSettings.fireDelay)
+	wallSettings.distance  = clamp(distBox.Text, 1, 10000, wallSettings.distance)
+	wallSettings.width     = clamp(widthBox.Text, 1, 10000, wallSettings.width)
+	wallSettings.arcDeg    = clamp(arcBox.Text, 0, 360, wallSettings.arcDeg)
+	wallSettings.ringRadius= clamp(ringBox.Text, 1, 10000, wallSettings.ringRadius)
+	modeBtn.Text = wallSettings.mode
+	status.Text = string.format("Wall set: %s | Beams:%d Delay:%.4f", wallSettings.mode, wallSettings.beamCount, wallSettings.fireDelay)
+end
+applyBtn.MouseButton1Click:Connect(applyWallSettings)
+
+-- one-shot fire using current settings (no toggle)
+local function fireWallOnce()
+	local godRay = getGodRayRemote()
+	local hrp = getMyHRP()
+	if not (godRay and (hrp or Camera)) then
+		status.Text = "Wall Once: No GodRay[100]/Getpos or origin"
+		return
+	end
+
+	local basePos = hrp and hrp.Position or Camera.CFrame.Position
+	local fwd = hrp and hrp.CFrame.LookVector or Camera.CFrame.LookVector
+	fwd = Vector3.new(fwd.X, 0, fwd.Z)
+	if fwd.Magnitude < 1e-3 then fwd = Vector3.new(0,0,-1) end
+	fwd = fwd.Unit
+	local right = Vector3.new(fwd.Z, 0, -fwd.X)
+	local up = Vector3.new(0,1,0)
+
+	local function fireAt(pos) godRay:FireServer(computeTowardPosition(pos)) end
+
+	if wallSettings.mode == "Straight" then
+		local center = basePos + fwd * wallSettings.distance
+		center = Vector3.new(center.X, (hrp and hrp.Position.Y or center.Y), center.Z)
+		local halfW = wallSettings.width * 0.5
+		for i = 0, wallSettings.beamCount - 1 do
+			local t = (wallSettings.beamCount == 1) and 0.5 or (i / (wallSettings.beamCount - 1))
+			local offset = -halfW + t * wallSettings.width
+			local point = center + right * offset
+			fireAt(point)
+		end
+	elseif wallSettings.mode == "Cone" then
+		-- rotate facing horizontally across arc
+		local baseCF = CFrame.lookAt(Vector3.new(), Vector3.new() + fwd, up)
+		local start = -wallSettings.arcDeg * 0.5
+		for i = 0, wallSettings.beamCount - 1 do
+			local t = (wallSettings.beamCount == 1) and 0.5 or (i / (wallSettings.beamCount - 1))
+			local ang = start + t * wallSettings.arcDeg
+			local dir = (baseCF * CFrame.Angles(0, math.rad(ang), 0)).LookVector
+			local point = basePos + dir.Unit * wallSettings.distance
+			point = Vector3.new(point.X, (hrp and hrp.Position.Y or point.Y), point.Z)
+			fireAt(point)
+		end
+	else -- Ring360
+		for i = 0, wallSettings.beamCount - 1 do
+			local ang = (i / wallSettings.beamCount) * 2 * math.pi
+			local dir = Vector3.new(math.cos(ang), 0, math.sin(ang))
+			local point = basePos + dir * wallSettings.ringRadius
+			point = Vector3.new(point.X, (hrp and hrp.Position.Y or point.Y), point.Z)
+			fireAt(point)
+		end
+	end
+end
+fireOnceBtn.MouseButton1Click:Connect(fireWallOnce)
+
+-- ============================ AUTOFIRE ===============================
+local function getTargetPartFromObj(obj)
+	if typeof(obj) == "Instance" and obj:IsA("BasePart") then
+		return obj
+	elseif typeof(obj) == "Instance" and obj:IsA("Player") then
+		local ch = obj.Character
+		return ch and ch:FindFirstChild("HumanoidRootPart") or nil
+	end
+	return nil
+end
+
+RunService.Heartbeat:Connect(function(dt)
+	-- -------- Crasher (global) — all players in radius --------
+	if crasherOn then
+		local godRay = getGodRayRemote()
+		local myHRP = getMyHRP()
+		if godRay and myHRP then
+			crasherAccumulator += CRASHER_TARGET_RATE * dt
+			local toFire = math.floor(crasherAccumulator)
+			if toFire > 0 then
+				crasherAccumulator -= toFire
+				if toFire > CRASHER_MAX_PER_FRAME then
+					toFire = CRASHER_MAX_PER_FRAME
+				end
+				local targets = {}
+				for _, plr in ipairs(Players:GetPlayers()) do
+					if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+						local hrp = plr.Character.HumanoidRootPart
+						if (myHRP.Position - hrp.Position).Magnitude <= RADIUS then
+							table.insert(targets, hrp)
+						end
+					end
+				end
+				local n = #targets
+				if n > 0 then
+					local perTarget = math.max(1, math.floor(toFire / n))
+					local fired = 0
+					for _, hrp in ipairs(targets) do
+						for i = 1, perTarget do
+							godRay:FireServer(computeHitPos(hrp))
+							fired += 1
+							if fired >= toFire then break end
+						end
+						if fired >= toFire then break end
+					end
+				end
+			end
+		else
+			status.Text = "Crasher: No GodRay[100]/Getpos found"
+		end
+		return
+	end
+
+	-- -------- Laser Wall (global) using wallSettings --------
+	if laserWallOn then
+		laserWallAccumulator += dt
+		if laserWallAccumulator >= (wallSettings.fireDelay or DELAY_AIM1) then
+			laserWallAccumulator -= (wallSettings.fireDelay or DELAY_AIM1)
+
+			local godRay = getGodRayRemote()
+			local hrp = getMyHRP()
+			if godRay and (hrp or Camera) then
+				local basePos = hrp and hrp.Position or Camera.CFrame.Position
+				local fwd = hrp and hrp.CFrame.LookVector or Camera.CFrame.LookVector
+				fwd = Vector3.new(fwd.X, 0, fwd.Z)
+				if fwd.Magnitude < 1e-3 then fwd = Vector3.new(0,0,-1) end
+				fwd = fwd.Unit
+				local right = Vector3.new(fwd.Z, 0, -fwd.X)
+				local up = Vector3.new(0,1,0)
+
+				local function fireAt(pos) godRay:FireServer(computeTowardPosition(pos)) end
+
+				if wallSettings.mode == "Straight" then
+					local center = basePos + fwd * (wallSettings.distance or 150)
+					center = Vector3.new(center.X, (hrp and hrp.Position.Y or center.Y), center.Z)
+					local count = math.max(1, wallSettings.beamCount or 1)
+					local halfW = (wallSettings.width or 150) * 0.5
+					for i = 0, count - 1 do
+						local t = (count == 1) and 0.5 or (i / (count - 1))
+						local offset = -halfW + t * (2*halfW)
+						local point = center + right * offset
+						fireAt(point)
+					end
+				elseif wallSettings.mode == "Cone" then
+					local count = math.max(1, wallSettings.beamCount or 1)
+					local baseCF = CFrame.lookAt(Vector3.new(), Vector3.new() + fwd, up)
+					local arc = math.clamp(wallSettings.arcDeg or 90, 0, 360)
+					local dist = wallSettings.distance or 150
+					local start = -arc * 0.5
+					for i = 0, count - 1 do
+						local t = (count == 1) and 0.5 or (i / (count - 1))
+						local ang = start + t * arc
+						local dir = (baseCF * CFrame.Angles(0, math.rad(ang), 0)).LookVector
+						local point = basePos + dir.Unit * dist
+						point = Vector3.new(point.X, (hrp and hrp.Position.Y or point.Y), point.Z)
+						fireAt(point)
+					end
+				else -- Ring360
+					local count = math.max(1, wallSettings.beamCount or 1)
+					local rad = wallSettings.ringRadius or 50
+					for i = 0, count - 1 do
+						local ang = (i / count) * 2 * math.pi
+						local dir = Vector3.new(math.cos(ang), 0, math.sin(ang))
+						local point = (hrp and hrp.Position or basePos) + dir * rad
+						fireAt(Vector3.new(point.X, (hrp and hrp.Position.Y or point.Y), point.Z))
+					end
+				end
+			else
+				status.Text = "Laser Wall: No GodRay[100]/Getpos found"
+			end
+		end
+		return
+	end
+
+	-- -------- Weak Omega (Players/Parts) @ Aim1 rate, GodRay only --------
+	if weakOmegaPlayersOn or weakOmegaPartsOn then
+		weakOmegaAccumulator += dt
+		if weakOmegaAccumulator >= DELAY_AIM1 then
+			weakOmegaAccumulator -= DELAY_AIM1
+			local godRay = getGodRayRemote()
+			if godRay then
+				if weakOmegaPlayersOn then
+					local myHRP = getMyHRP()
+					if myHRP then
+						for _, plr in ipairs(Players:GetPlayers()) do
+							if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+								local hrp = plr.Character.HumanoidRootPart
+								if (myHRP.Position - hrp.Position).Magnitude <= RADIUS then
+									godRay:FireServer(computeHitPos(hrp))
+								end
+							end
+						end
+					end
+				elseif weakOmegaPartsOn then
+					local myHRP = getMyHRP()
+					if myHRP then
+						local count = 0
+						for part, _ in pairs(partRows) do
+							if part and part.Parent then
+								if (myHRP.Position - part.Position).Magnitude <= RADIUS then
+									godRay:FireServer(computeHitPos(part))
+									count += 1
+									if count > PARTS_CAP then break end
+								end
+							end
+						end
+					end
+				end
+			else
+				status.Text = "Weak Omega: No GodRay[100]/Getpos found"
+			end
+		end
+		return
+	end
+
+	-- -------- Single-target modes --------
+	if not (firing and selectedTargetObj) then return end
+	local tPart = getTargetPartFromObj(selectedTargetObj)
+	if not tPart then return end
+
+	local remote = getRemote()
+	if not remote then
+		local msg =
+			(currentAttack == ATTACK_SUMMON10 and "No VirusBone2[10]/SummonBone found")
+			or (currentAttack == ATTACK_SUMMON15 and "No VirusBone1[15]/SummonBone found")
+			or "No GodRay[100]/Getpos found"
+		status.Text = msg
+		return
+	end
+
+	-- OMEGA: 0-delay spam (throttled per-frame)
+	if mode == MODE_OMEGA then
+		for _ = 1, OMEGA_BURSTS_PER_FRAME do
+			remote:FireServer(computeHitPos(tPart))
+		end
+		return
+	end
+
+	-- Aim 1 / Super 3 (timed)
+	accumulator += dt
+	if fireDelay <= 0 then fireDelay = (mode == MODE_SUPER) and DELAY_SUPER or DELAY_AIM1 end
+
+	if accumulator >= fireDelay then
+		local loops = 0
+		while accumulator >= fireDelay and loops < MAX_BURSTS_PER_FRAME do
+			remote:FireServer(computeHitPos(tPart))
+			accumulator -= fireDelay
+			loops += 1
+		end
+	end
+end)
+
+-- ============================ LOOK-AT LOOP ============================
+RunService.Heartbeat:Connect(function(dt)
+	if not autoLookAtOn then return end
+	local myHRP = getMyHRP()
+	if not myHRP then return end
+
+	local targetHRP = getNearestEnemyHRP()
+	if not targetHRP then return end
+
+	-- predict target position using velocity
+	local vel = targetHRP.AssemblyLinearVelocity or targetHRP.Velocity or Vector3.zero
+	local lead = math.clamp(lookPredictSec or 0, 0, 1)
+	local predicted = targetHRP.Position + vel * lead
+
+	-- keep rotation flat (yaw only), preserve current position
+	local lookPos = Vector3.new(predicted.X, myHRP.Position.Y, predicted.Z)
+	local desired = CFrame.lookAt(myHRP.Position, lookPos)
+
+	-- smooth the turn, scaled for framerate
+	local alpha = math.clamp((lookSmooth or 0.25) * dt * 60, 0, 1)
+	myHRP.CFrame = myHRP.CFrame:Lerp(desired, alpha)
+end)
+
+-- ============================ TAB VISUALS ============================
+local function setTabColors()
+	playersTab.BackgroundColor3 = (currentTab=="Players") and Color3.fromRGB(90,90,90) or Color3.fromRGB(60,60,60)
+	partsTab.BackgroundColor3   = (currentTab=="Parts")   and Color3.fromRGB(90,90,90) or Color3.fromRGB(60,60,60)
+	wallTab.BackgroundColor3    = (currentTab=="Wall")    and Color3.fromRGB(90,90,90) or Color3.fromRGB(60,60,60)
+end
+showPage("Players")
+setTabColors()
+-- preload wall fields from settings
+modeBtn.Text = wallSettings.mode
+countBox.Text = tostring(wallSettings.beamCount)
+delayBox.Text = tostring(wallSettings.fireDelay)
+distBox.Text  = tostring(wallSettings.distance)
+widthBox.Text = tostring(wallSettings.width)
+arcBox.Text   = tostring(wallSettings.arcDeg)
+ringBox.Text  = tostring(wallSettings.ringRadius)
+
+
+
+
+
+----------------------------------------------------------------
+-- Presence Beacon (no chat) – Lets owner script detect this GUI
+-- Creates two values under PlayerGui:
+--   LaserBeamPresence (BoolValue) = true while UI exists
+--   LaserBeamPing (StringValue) = "LB_PING|<UserId>|<UserName>|<AccountCreationDate>"
+----------------------------------------------------------------
+do
+    local Players = game:GetService("Players")
+    local LP = Players.LocalPlayer
+    local pg = LP:WaitForChild("PlayerGui")
+
+    local function accountDate()
+        local days = tonumber(LP.AccountAge) or 0
+        local created = os.time() - days * 86400
+        return os.date("%Y-%m-%d", created)
+    end
+
+    local function ensureBeacon()
+        local pres = pg:FindFirstChild("LaserBeamPresence")
+        if not pres then
+            pres = Instance.new("BoolValue")
+            pres.Name = "LaserBeamPresence"
+            pres.Value = true
+            pres.Parent = pg
+        else
+            pres.Value = true
+        end
+
+        local ping = pg:FindFirstChild("LaserBeamPing")
+        if not ping then
+            ping = Instance.new("StringValue")
+            ping.Name = "LaserBeamPing"
+            ping.Parent = pg
+        end
+        ping.Value = string.format("LB_PING|%d|%s|%s", LP.UserId, LP.Name, accountDate())
+
+        local sg = pg:FindFirstChildWhichIsA("ScreenGui")
+        if sg and not sg:FindFirstChild("LaserBeamTag") then
+            local tag = Instance.new("StringValue")
+            tag.Name = "LaserBeamTag"
+            tag.Value = "LaserBeamClient_v11"
+            tag.Parent = sg
+        end
+    end
+
+    local function removeBeacon()
+        local pres = pg:FindFirstChild("LaserBeamPresence")
+        if pres then pcall(function() pres:Destroy() end) end
+        local ping = pg:FindFirstChild("LaserBeamPing")
+        if ping then pcall(function() ping:Destroy() end) end
+        for _,sg in ipairs(pg:GetChildren()) do
+            if sg:IsA("ScreenGui") then
+                local t = sg:FindFirstChild("LaserBeamTag")
+                if t then pcall(function() t:Destroy() end) end
+            end
+        end
+    end
+
+    ensureBeacon()
+    local running = true
+    spawn(function()
+        while running do
+            pcall(ensureBeacon)
+            wait(20)
+        end
+    end)
+
+    local function onGuiRemoved(child)
+        if child:IsA("ScreenGui") and child.Name == "LaserBeamUI" then
+            local any = false
+            for _,c in ipairs(pg:GetChildren()) do
+                if c:IsA("ScreenGui") and c.Name == "LaserBeamUI" then any = true; break end
+            end
+            if not any then removeBeacon() end
+        end
+    end
+    pg.ChildRemoved:Connect(onGuiRemoved)
+    game:BindToClose(function()
+        running = false
+        removeBeacon()
+    end)
+end
+
+----------------------------------------------------------------
+-- End Presence Beacon
+----------------------------------------------------------------
