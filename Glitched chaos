@@ -1,0 +1,234 @@
+-- SCRIPT | GLITCHED CHAOS 📍
+-- Using Fluent UI Library
+
+print("📍 Loading  Script for Glitched Chaos...")
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local VirtualUser = game:GetService("VirtualUser")
+
+local plr = Players.LocalPlayer
+
+-- Anti-AFK
+plr.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+-- Load Fluent UI
+print("Loading Fluent UI...")
+local success, Fluent = pcall(function()
+    return loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+end)
+
+if not success then
+    warn("Failed to load Fluent UI, trying alternate link...")
+    Fluent = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Fluent.lua"))()
+end
+
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+print("Creating window...")
+
+-- Create Window
+local Window = Fluent:CreateWindow({
+    Title = "📍 Script | Glitched Chaos",
+    SubTitle = "Hack Op",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Darker",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+-- Create Tabs
+local Tabs = {
+    Main = Window:AddTab({ Title = "🏠 Main", Icon = "home" }),
+    Emote = Window:AddTab({ Title = "📍 Emote", Icon = "circle" }),
+    Settings = Window:AddTab({ Title = "⚙️ Settings", Icon = "settings" })
+}
+
+-- MAIN TAB
+Tabs.Main:AddParagraph({
+    Title = "📍 Welcome to Script!",
+    Content = "Use script op - real!"
+})
+
+local StatsLabel = Tabs.Main:AddParagraph({
+    Title = "📊 Statistics",
+    Content = "Calls Sent: 0 | Frequency: 10/s | Mode: Send"
+})
+
+task.spawn(function()
+    while task.wait(0.5) do
+        local mode = getgenv().sendMode and "Send" or "Simulate"
+        StatsLabel:SetDesc(string.format(
+            "Calls Sent: %d | Frequency: %d/s | Mode: %s",
+            getgenv().callsSent,
+            getgenv().frequency,
+            mode
+        ))
+    end
+end)
+
+Tabs.Main:AddButton({
+    Title = "🎮 Join Discord",
+    Description = "Get support and updates",
+    Callback = function()
+        setclipboard("")
+        Fluent:Notify({
+            Title = "Discord Copied!",
+            Content = "Discord invite copied to clipboard!",
+            Duration = 3
+        })
+    end
+})
+
+-- Emote TAB
+
+Tabs.Emote:AddButton({
+    Title = "ContainerKick",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.ContainerKick:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "Container",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.Container:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "IdleDeathGamble",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.IdleDeathGamble:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "IdleDeathGambleFail",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.IdleDeathGambleFail:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "KingofCurses",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.KingofCurses:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "LuckyBeatdown",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.LuckyBeatdown:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "PachinkoBall",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.PachinkoBall:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "ShutterDoors",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Remotes.ShutterDoors:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "HollowPurpleEvent",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").HollowPurpleEvent:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "Transform",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Chainsaw_Man_RS_Folder.Remotes.Transform_RE:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "Fire",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").AssetsSukuna.Remtoes.Fire:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "MalevolentShrine",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").Events.MalevolentShrine:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "GiveaFrenPrize",
+    Description = "Hi",
+    Callback = function()
+        game:GetService("ReplicatedStorage").GiveFrenPrize:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "BarrageGenos",
+    Description = "Hi",
+    Callback = function()
+       game:GetService("ReplicatedStorage").Events.BarrageGenos:FireServer()
+    end
+})
+
+Tabs.Emote:AddButton({
+    Title = "Atomic",
+    Description = "Hi",
+    Callback = function()
+       game:GetService("ReplicatedStorage").AtomicFolder.Event:FireServer()
+    end
+})
+
+-- SETTINGS TAB
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({})
+
+InterfaceManager:SetFolder("Script")
+SaveManager:SetFolder("Script/GlitchedChaos")
+
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+Window:SelectTab(1)
+
+Fluent:Notify({
+    Title = "📍 Script Loaded!",
+    Content = "Op!",
+    Duration = 5
+})
+
+SaveManager:LoadAutoloadConfig()
+
+print("✅ Script fully loaded!")
+print("📍Op script!")
