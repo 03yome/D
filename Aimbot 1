@@ -1,0 +1,1124 @@
+-- LocalScript: Stalk Mode v7.2 (FINALIZED) - GUI MINIMALISTA PRETO/BRANCO
+ 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera 
+local player = Players.LocalPlayer
+ 
+-- ========================================================================
+-- SETTINGS (Modifiable Variables)
+-- ========================================================================
+local stalkFOVdeg = 160      
+local fugaMaxDistancia = 65    
+local maxStalkDistance = 65   
+local stalkBehindDistance = 2.5 
+local cameraOffset = Vector3.new(0, 5, 10) 
+local cameraDistance = 10 
+ 
+-- PHYSICS AND RAYCAST CONSTANTS
+local TP_CHECK_HEIGHT = 100     
+local TP_RAY_LENGTH = 200       
+local CEILING_CHECK_HEIGHT = 8  -- Height to check for a ceiling above the target
+ 
+-- STATE
+local destroyed = false
+local stalking = false
+local viewingTarget = false     
+local stalkConn = nil
+local viewConn = nil            
+local stalkTarget = nil         -- Stalk Target
+local viewTarget = nil          -- Camera Target
+local selectedPlayer = nil      -- Player Selected in List
+local originalCFrame = nil      
+local TPToggle = false -- State of the Click TP Tool
+local TPTool = nil     -- Reference to the Tool
+ 
+-- GUI State
+local lastSelectedItem = nil 
+local DEFAULT_COLOR = Color3.fromRGB(20, 20, 20)
+local SELECTED_COLOR = Color3.fromRGB(100, 100, 100) 
+ 
+-- Initialize camera distance
+cameraDistance = cameraOffset.Z
+ 
+-- ========================================================================
+-- I. Generation and Structure of the MAIN GUI - MINIMALISTA
+-- ========================================================================
+ 
+local gui = Instance.new("ScreenGui")
+gui.Name = "StalkGUI"
+gui.Parent = player:WaitForChild("PlayerGui")
+gui.ResetOnSpawn = false
+ 
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 250, 0, 535) 
+frame.Position = UDim2.new(0.5, -125, 0.5, -267)
+frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+
+-- Cantos arredondados
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = frame
+
+-- Borda branca sutil
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(255, 255, 255)
+stroke.Thickness = 1
+stroke.Parent = frame
+ 
+-- Title Container
+local titleContainer = Instance.new("Frame", frame)
+titleContainer.Size = UDim2.new(1, 0, 0, 30)
+titleContainer.Position = UDim2.new(0, 0, 0, 0)
+titleContainer.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+titleContainer.BorderSizePixel = 0
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 8)
+titleCorner.Parent = titleContainer
+
+-- Title
+local title = Instance.new("TextLabel", titleContainer)
+title.Size = UDim2.new(0.8, 0, 1, 0)
+title.Position = UDim2.new(0, 5, 0, 0)
+title.Text = "STALK MODE"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.BorderSizePixel = 0
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Botão Minimizar (será configurado depois)
+local minimizeBtn = Instance.new("TextButton", titleContainer)
+minimizeBtn.Name = "MinimizeButton"
+minimizeBtn.Size = UDim2.new(0.2, 0, 1, 0)
+minimizeBtn.Position = UDim2.new(0.8, 0, 0, 0)
+minimizeBtn.Text = "−"
+minimizeBtn.TextScaled = true
+minimizeBtn.BackgroundTransparency = 1
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.Font = Enum.Font.GothamBold
+minimizeBtn.BorderSizePixel = 0
+
+-- Variável para controlar minimização
+local isMinimized = false
+local scrollingFrame = Instance.new("ScrollingFrame", frame)
+scrollingFrame.Size = UDim2.new(1, 0, 0, 280) 
+scrollingFrame.Position = UDim2.new(0, 0, 0, 30)
+scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0) 
+scrollingFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+scrollingFrame.BorderSizePixel = 0
+scrollingFrame.ScrollBarThickness = 4
+scrollingFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+ 
+local listLayout = Instance.new("UIListLayout", scrollingFrame)
+listLayout.Padding = UDim.new(0, 5)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.FillDirection = Enum.FillDirection.Vertical
+ 
+-- TEMPLATE
+local playerTemplate = Instance.new("TextButton")
+playerTemplate.Name = "PlayerTemplate"
+playerTemplate.Size = UDim2.new(1, 0, 0, 50)
+playerTemplate.BackgroundColor3 = DEFAULT_COLOR
+playerTemplate.Text = "" 
+playerTemplate.BorderSizePixel = 0
+ 
+local playerCorner = Instance.new("UICorner")
+playerCorner.CornerRadius = UDim.new(0, 4)
+playerCorner.Parent = playerTemplate
+ 
+local avatarImage = Instance.new("ImageLabel", playerTemplate)
+avatarImage.Name = "Avatar"
+avatarImage.Size = UDim2.new(0, 40, 0, 40)
+avatarImage.Position = UDim2.new(0, 5, 0.5, -20)
+avatarImage.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+avatarImage.ScaleType = Enum.ScaleType.Fit
+avatarImage.Image = "rbxassetid://1526372134" 
+avatarImage.BorderSizePixel = 0
+ 
+local nameLabel = Instance.new("TextLabel", playerTemplate)
+nameLabel.Name = "NameLabel"
+nameLabel.Size = UDim2.new(0.7, 0, 1, 0)
+nameLabel.Position = UDim2.new(0, 50, 0, 0)
+nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+nameLabel.TextScaled = true
+nameLabel.BackgroundTransparency = 1
+nameLabel.Font = Enum.Font.Gotham
+nameLabel.BorderSizePixel = 0
+ 
+-- MAIN GUI BUTTONS - MINIMALISTA
+ 
+local configBtn = Instance.new("TextButton", frame)
+configBtn.Name = "ConfigButton"
+configBtn.Size = UDim2.new(0.9, 0, 0, 35)
+configBtn.Position = UDim2.new(0.05, 0, 1, -215) 
+configBtn.Text = "SETTINGS"
+configBtn.TextScaled = true
+configBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+configBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+configBtn.Font = Enum.Font.GothamBold
+configBtn.BorderSizePixel = 0
+
+local configCorner = Instance.new("UICorner")
+configCorner.CornerRadius = UDim.new(0, 4)
+configCorner.Parent = configBtn
+
+local configStroke = Instance.new("UIStroke")
+configStroke.Color = Color3.fromRGB(100, 100, 100)
+configStroke.Thickness = 0.5
+configStroke.Parent = configBtn
+ 
+local viewTargetBtn = Instance.new("TextButton", frame)
+viewTargetBtn.Name = "ViewTargetButton"
+viewTargetBtn.Size = UDim2.new(0.9, 0, 0, 35)
+viewTargetBtn.Position = UDim2.new(0.05, 0, 1, -170) 
+viewTargetBtn.Text = "VIEW"
+viewTargetBtn.TextScaled = true
+viewTargetBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+viewTargetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+viewTargetBtn.Font = Enum.Font.GothamBold
+viewTargetBtn.BorderSizePixel = 0
+
+local viewCorner = Instance.new("UICorner")
+viewCorner.CornerRadius = UDim.new(0, 4)
+viewCorner.Parent = viewTargetBtn
+
+local viewStroke = Instance.new("UIStroke")
+viewStroke.Color = Color3.fromRGB(100, 100, 100)
+viewStroke.Thickness = 0.5
+viewStroke.Parent = viewTargetBtn
+ 
+local stalkBtn = Instance.new("TextButton", frame)
+stalkBtn.Name = "StalkButton"
+stalkBtn.Size = UDim2.new(0.9, 0, 0, 35)
+stalkBtn.Position = UDim2.new(0.05, 0, 1, -125) 
+stalkBtn.Text = "STALK"
+stalkBtn.TextScaled = true
+stalkBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+stalkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stalkBtn.Font = Enum.Font.GothamBold
+stalkBtn.BorderSizePixel = 0
+
+local stalkCorner = Instance.new("UICorner")
+stalkCorner.CornerRadius = UDim.new(0, 4)
+stalkCorner.Parent = stalkBtn
+
+local stalkStroke = Instance.new("UIStroke")
+stalkStroke.Color = Color3.fromRGB(100, 100, 100)
+stalkStroke.Thickness = 0.5
+stalkStroke.Parent = stalkBtn
+ 
+local stalkRandomBtn = Instance.new("TextButton", frame)
+stalkRandomBtn.Name = "StalkRandomButton"
+stalkRandomBtn.Size = UDim2.new(0.9, 0, 0, 35)
+stalkRandomBtn.Position = UDim2.new(0.05, 0, 1, -80) 
+stalkRandomBtn.Text = "RANDOM"
+stalkRandomBtn.TextScaled = true
+stalkRandomBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+stalkRandomBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stalkRandomBtn.Font = Enum.Font.GothamBold
+stalkRandomBtn.BorderSizePixel = 0
+
+local randomCorner = Instance.new("UICorner")
+randomCorner.CornerRadius = UDim.new(0, 4)
+randomCorner.Parent = stalkRandomBtn
+
+local randomStroke = Instance.new("UIStroke")
+randomStroke.Color = Color3.fromRGB(100, 100, 100)
+randomStroke.Thickness = 0.5
+randomStroke.Parent = stalkRandomBtn
+ 
+local clickTPBtn = Instance.new("TextButton", frame)
+clickTPBtn.Name = "ClickTPButton"
+clickTPBtn.Size = UDim2.new(0.9, 0, 0, 35)
+clickTPBtn.Position = UDim2.new(0.05, 0, 1, -35) 
+clickTPBtn.Text = "CLICK TP"
+clickTPBtn.TextScaled = true
+clickTPBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+clickTPBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+clickTPBtn.Font = Enum.Font.GothamBold
+clickTPBtn.BorderSizePixel = 0
+
+local clickCorner = Instance.new("UICorner")
+clickCorner.CornerRadius = UDim.new(0, 4)
+clickCorner.Parent = clickTPBtn
+
+local clickStroke = Instance.new("UIStroke")
+clickStroke.Color = Color3.fromRGB(100, 100, 100)
+clickStroke.Thickness = 0.5
+clickStroke.Parent = clickTPBtn
+ 
+local refreshBtn = Instance.new("TextButton", frame)
+refreshBtn.Name = "RefreshButton"
+refreshBtn.Size = UDim2.new(0.43, 0, 0, 35)
+refreshBtn.Position = UDim2.new(0.05, 0, 1, 5) 
+refreshBtn.Text = "REFRESH"
+refreshBtn.TextScaled = true
+refreshBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+refreshBtn.Font = Enum.Font.GothamBold
+refreshBtn.BorderSizePixel = 0
+
+local refreshCorner = Instance.new("UICorner")
+refreshCorner.CornerRadius = UDim.new(0, 4)
+refreshCorner.Parent = refreshBtn
+
+local refreshStroke = Instance.new("UIStroke")
+refreshStroke.Color = Color3.fromRGB(100, 100, 100)
+refreshStroke.Thickness = 0.5
+refreshStroke.Parent = refreshBtn
+ 
+local destroyBtn = Instance.new("TextButton", frame)
+destroyBtn.Name = "DestroyButton"
+destroyBtn.Size = UDim2.new(0.43, 0, 0, 35)
+destroyBtn.Position = UDim2.new(0.52, 0, 1, 5) 
+destroyBtn.Text = "DESTROY"
+destroyBtn.TextScaled = true
+destroyBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+destroyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+destroyBtn.Font = Enum.Font.GothamBold
+destroyBtn.BorderSizePixel = 0
+
+local destroyCorner = Instance.new("UICorner")
+destroyCorner.CornerRadius = UDim.new(0, 4)
+destroyCorner.Parent = destroyBtn
+
+local destroyStroke = Instance.new("UIStroke")
+destroyStroke.Color = Color3.fromRGB(100, 100, 100)
+destroyStroke.Thickness = 0.5
+destroyStroke.Parent = destroyBtn
+ 
+local mainElements = {scrollingFrame, viewTargetBtn, stalkBtn, stalkRandomBtn, clickTPBtn, refreshBtn, destroyBtn}
+ 
+-- ========================================================================
+-- II. Generation of the SETTINGS FRAME - MINIMALISTA
+-- ========================================================================
+local settingsFrame = Instance.new("Frame", frame)
+settingsFrame.Name = "SettingsFrame"
+settingsFrame.Size = UDim2.new(1, 0, 0, 280) 
+settingsFrame.Position = UDim2.new(0, 0, 0, 30)
+settingsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+settingsFrame.Visible = false 
+settingsFrame.BorderSizePixel = 0
+ 
+local settingsScrolling = Instance.new("ScrollingFrame", settingsFrame)
+settingsScrolling.Size = UDim2.new(1, 0, 1, -100)
+settingsScrolling.Position = UDim2.new(0, 0, 0, 0)
+settingsScrolling.CanvasSize = UDim2.new(0, 0, 0, 300) 
+settingsScrolling.BackgroundTransparency = 1
+settingsScrolling.BorderSizePixel = 0
+settingsScrolling.ScrollBarThickness = 4
+settingsScrolling.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+ 
+local settingsLayout = Instance.new("UIListLayout", settingsScrolling)
+settingsLayout.Padding = UDim.new(0, 5)
+settingsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+settingsLayout.FillDirection = Enum.FillDirection.Vertical
+ 
+local function createSettingInput(parent, settingName, initialValue)
+    local container = Instance.new("Frame", parent)
+    container.Size = UDim2.new(0.95, 0, 0, 30)
+    container.BackgroundTransparency = 1
+    container.BorderSizePixel = 0
+ 
+    local label = Instance.new("TextLabel", container)
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.Text = settingName
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.Gotham
+    label.TextSize = 12
+    label.BorderSizePixel = 0
+ 
+    local input = Instance.new("TextBox", container)
+    input.Name = settingName:gsub(" ", ""):gsub("[^%w_]", "") 
+    input.Size = UDim2.new(0.35, 0, 1, 0)
+    input.Position = UDim2.new(0.65, 0, 0, 0)
+    input.Text = tostring(initialValue)
+    input.TextColor3 = Color3.fromRGB(255, 255, 255)
+    input.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    input.Font = Enum.Font.Gotham
+    input.TextSize = 11
+    input.ClearTextOnFocus = false
+    input.BorderSizePixel = 0
+
+    local inputStroke = Instance.new("UIStroke")
+    inputStroke.Color = Color3.fromRGB(80, 80, 80)
+    inputStroke.Thickness = 0.5
+    inputStroke.Parent = input
+ 
+    return input
+end
+ 
+local fovInput = createSettingInput(settingsScrolling, "FOV Angle:", stalkFOVdeg)
+local escapeInput = createSettingInput(settingsScrolling, "Escape Distance:", fugaMaxDistancia)
+local tpMaxInput = createSettingInput(settingsScrolling, "Stalk Distance:", maxStalkDistance)
+local tpBehindInput = createSettingInput(settingsScrolling, "Behind Distance:", stalkBehindDistance)
+ 
+settingsScrolling.CanvasSize = UDim2.new(0, 0, 0, 4 * 35)
+ 
+local applyBtn = Instance.new("TextButton", settingsFrame)
+applyBtn.Name = "ApplyButton"
+applyBtn.Size = UDim2.new(0.9, 0, 0, 30)
+applyBtn.Position = UDim2.new(0.05, 0, 1, -70)
+applyBtn.Text = "APPLY"
+applyBtn.TextScaled = true
+applyBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+applyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+applyBtn.Font = Enum.Font.GothamBold
+applyBtn.BorderSizePixel = 0
+
+local applyCorner = Instance.new("UICorner")
+applyCorner.CornerRadius = UDim.new(0, 4)
+applyCorner.Parent = applyBtn
+
+local applyStroke = Instance.new("UIStroke")
+applyStroke.Color = Color3.fromRGB(100, 100, 100)
+applyStroke.Thickness = 0.5
+applyStroke.Parent = applyBtn
+ 
+local backBtnSettings = Instance.new("TextButton", settingsFrame) 
+backBtnSettings.Name = "BackButtonSettings"
+backBtnSettings.Size = UDim2.new(0.9, 0, 0, 30)
+backBtnSettings.Position = UDim2.new(0.05, 0, 1, -35)
+backBtnSettings.Text = "BACK"
+backBtnSettings.TextScaled = true
+backBtnSettings.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+backBtnSettings.TextColor3 = Color3.fromRGB(255, 255, 255)
+backBtnSettings.Font = Enum.Font.GothamBold
+backBtnSettings.BorderSizePixel = 0
+
+local backCorner = Instance.new("UICorner")
+backCorner.CornerRadius = UDim.new(0, 4)
+backCorner.Parent = backBtnSettings
+
+local backStroke = Instance.new("UIStroke")
+backStroke.Color = Color3.fromRGB(100, 100, 100)
+backStroke.Thickness = 0.5
+backStroke.Parent = backBtnSettings
+ 
+-- ========================================================================
+-- III. FUNCTIONS: Game Logic
+-- ========================================================================
+ 
+local character
+local hrp
+local hum
+ 
+local function updateCharacter()
+    character = player.Character or player.CharacterAdded:Wait()
+    hrp = character:WaitForChild("HumanoidRootPart")
+    hum = character:FindFirstChildOfClass("Humanoid")
+end
+ 
+updateCharacter()
+ 
+player.CharacterAdded:Connect(function(newCharacter)
+    if stalking then stopStalk() end
+    if viewingTarget then stopView() end 
+    if TPToggle then toggleClickTP() end
+    updateCharacter()
+end)
+ 
+local function pickNearestPlayer()
+    local nearestPlayer = nil
+    local minDistance = math.huge
+ 
+    if not hrp then return nil end 
+ 
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= player and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") and pl.Character:FindFirstChildOfClass("Humanoid") and pl.Character:FindFirstChildOfClass("Humanoid").Health > 0 then
+            local targetHRP = pl.Character.HumanoidRootPart
+            local distance = (hrp.Position - targetHRP.Position).Magnitude
+ 
+            if distance < minDistance then
+                minDistance = distance
+                nearestPlayer = pl
+            end
+        end
+    end
+ 
+    return nearestPlayer
+end
+ 
+local function setStalkerState(isStalking)
+    if not character or not hrp then return end
+ 
+    local transparencyValue = 0 
+    local canCollideValue = not isStalking         
+ 
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("Decal") or part:IsA("SpecialMesh") then
+            if part.Name ~= "HumanoidRootPart" then 
+                pcall(function() part.LocalTransparencyModifier = transparencyValue end) 
+            end
+            pcall(function() part.CanCollide = canCollideValue end) 
+        elseif part:IsA("Shirt") or part:IsA("Pants") then
+            pcall(function() part.Transparency = transparencyValue end)
+        end
+    end
+ 
+    if hum then
+        hum.PlatformStand = false
+    end
+end
+ 
+local function getSafeCFrame(desiredPosition, currentCFrame)
+    local rayOrigin = Vector3.new(desiredPosition.X, desiredPosition.Y + TP_CHECK_HEIGHT, desiredPosition.Z)
+    local rayDirection = Vector3.new(0, -TP_RAY_LENGTH, 0)
+ 
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {character} 
+ 
+    local rayResult = Workspace:Raycast(rayOrigin, rayDirection, rayParams)
+ 
+    if rayResult then
+        local safeY = rayResult.Position.Y + 2.5 
+ 
+        local lookVector = currentCFrame.LookVector
+        local upVector = currentCFrame.UpVector
+ 
+        return CFrame.new(desiredPosition.X, safeY, desiredPosition.Z) * CFrame.fromMatrix(Vector3.new(), lookVector, upVector)
+    else
+        return CFrame.new(desiredPosition.X, desiredPosition.Y, desiredPosition.Z) 
+    end
+end
+ 
+local function teleportStalk(desiredCFrame, targetHRP)
+    if destroyed or not hrp or not targetHRP then return end
+ 
+    local targetY = targetHRP.Position.Y
+    local finalPosition = Vector3.new(desiredCFrame.X, targetY, desiredCFrame.Z)
+ 
+    local newCFrame = CFrame.new(finalPosition) * (desiredCFrame - desiredCFrame.Position)
+ 
+    hrp.CFrame = newCFrame
+end
+ 
+-- ========================================================================
+-- IV. FUNCTIONS: VIEWING (CAMERA)
+-- ========================================================================
+ 
+local function stopView()
+    if not viewingTarget then return end
+ 
+    viewingTarget = false
+    viewTarget = nil
+ 
+    if viewConn then
+        viewConn:Disconnect()
+        viewConn = nil
+    end
+ 
+    if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then
+        Camera.CameraSubject = player.Character:FindFirstChildOfClass("Humanoid")
+    else
+        Camera.CameraType = Enum.CameraType.Custom
+    end
+ 
+    viewTargetBtn.Text = "VIEW"
+    viewTargetBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+end
+ 
+local function startView(pl)
+    if destroyed or not pl or not pl.Character or not hrp then return end
+ 
+    if viewingTarget then 
+        stopView()  
+        if viewTarget == pl then return end
+    end
+ 
+    local targHum = pl.Character:FindFirstChildOfClass("Humanoid")
+    if not targHum then 
+        viewTargetBtn.Text = "ERROR"
+        task.wait(1.5)
+        viewTargetBtn.Text = "VIEW"
+        return  
+    end
+ 
+    viewingTarget = true
+    viewTarget = pl
+ 
+    Camera.CameraSubject = targHum
+ 
+    if Camera.CameraType == Enum.CameraType.Scriptable then
+        Camera.CameraType = Enum.CameraType.Custom
+    end
+ 
+    viewTargetBtn.Text = "STOP"
+    viewTargetBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+end
+ 
+-- ========================================================================
+-- V. FUNCTIONS: STALK
+-- ========================================================================
+ 
+local function stalkLoop() end
+ 
+local function stopStalk()
+    if not stalking then return end 
+ 
+    stalking = false
+    stalkTarget = nil
+ 
+    if originalCFrame and hrp then
+        hrp.CFrame = getSafeCFrame(originalCFrame.Position, originalCFrame)
+        originalCFrame = nil 
+    end
+ 
+    setStalkerState(false)  
+ 
+    if stalkConn then
+        stalkConn:Disconnect()
+        stalkConn = nil
+    end
+ 
+    stalkBtn.Text = "STALK"
+    stalkBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ 
+    stalkRandomBtn.Text = "RANDOM"
+    stalkRandomBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+end
+ 
+local function startStalk(pl)
+    if destroyed or not pl or not pl.Character or not hrp or not hum then return end
+ 
+    if stalking and stalkTarget == pl then  
+        stopStalk()
+        return 
+    end
+ 
+    if stalking and stalkTarget ~= pl then  
+        stopStalk() 
+    end
+ 
+    local targHRP = pl.Character:FindFirstChild("HumanoidRootPart")
+    local targHum = pl.Character:FindFirstChildOfClass("Humanoid")
+    if not (targHRP and targHum and targHum.Health > 0) then return end
+ 
+    if not stalking then
+            originalCFrame = hrp.CFrame
+    end
+ 
+    stalking = true
+    stalkTarget = pl
+ 
+    stalkBtn.Text = "STOP"
+    stalkBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50) 
+ 
+    setStalkerState(true)
+ 
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local fovCos = math.cos(math.rad(stalkFOVdeg * 0.5))
+ 
+    if stalkConn then stalkConn:Disconnect() end
+ 
+    stalkLoop = function()
+        if destroyed or not stalking or not stalkTarget or not stalkTarget.Character or not hrp or not hum then  
+            stopStalk() 
+            return 
+        end
+        targHRP = stalkTarget.Character:FindFirstChild("HumanoidRootPart")
+        targHum = stalkTarget.Character:FindFirstChildOfClass("Humanoid")
+        if not (targHRP and targHum and targHum.Health > 0) then  
+            stopStalk() 
+            return 
+        end
+ 
+        local targetHeadPos = targHRP.Position + Vector3.new(0, 1.5, 0)
+        local distance = (hrp.Position - targHRP.Position).Magnitude
+ 
+        local rayCeilingParams = RaycastParams.new()
+        rayCeilingParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayCeilingParams.FilterDescendantsInstances = {stalkTarget.Character, character} 
+ 
+        local rayCeilingResult = Workspace:Raycast(
+            targetHeadPos,  
+            Vector3.new(0, CEILING_CHECK_HEIGHT, 0),  
+            rayCeilingParams
+        )
+ 
+        if rayCeilingResult and distance < maxStalkDistance then
+             return
+        end
+ 
+        if distance > maxStalkDistance then
+            local desiredCFrame = targHRP.CFrame * CFrame.new(0, 0, stalkBehindDistance)
+            teleportStalk(desiredCFrame, targHRP)  
+            return
+        end
+ 
+        local lookAtTarget = Vector3.new(targHRP.Position.X, hrp.Position.Y, targHRP.Position.Z)
+        local newCFrame = CFrame.new(hrp.Position, lookAtTarget)
+        hrp.CFrame = newCFrame
+ 
+        local dirToMe = hrp.Position - targHRP.Position
+        if dirToMe.Magnitude > 0.001 then
+ 
+            local lookVector = targHRP.CFrame.LookVector
+            local targetDirection = dirToMe.Unit 
+            local dot = lookVector:Dot(targetDirection)
+ 
+            if dot >= fovCos then  
+                local rayMaxRange = 30  
+                if distance > rayMaxRange then return end 
+ 
+                local headPosition = targHRP.Position + Vector3.new(0, 1.5, 0)  
+                local rayDirection = hrp.Position - headPosition
+ 
+                rayParams.FilterDescendantsInstances = {stalkTarget.Character, character} 
+ 
+                local rayResult = Workspace:Raycast(headPosition, rayDirection, rayParams)
+ 
+                local isStalkerHit = rayResult and rayResult.Instance:IsDescendantOf(character)
+                local isClearPath = not rayResult
+ 
+                if isStalkerHit or isClearPath then
+                    task.spawn(function()
+                        if destroyed or not stalking or not stalkTarget or not stalkTarget.Character or not hrp then return end
+                        local currHRP = stalkTarget.Character:FindFirstChild("HumanoidRootPart")
+                        if not currHRP then return end
+ 
+                        pcall(function() stalkConn:Disconnect() end)
+                        stalkConn = nil
+ 
+                        local offset = Vector3.new(math.random(-fugaMaxDistancia, fugaMaxDistancia), 0, math.random(-fugaMaxDistancia, fugaMaxDistancia))
+                        local desiredFugaPos = currHRP.Position + offset
+ 
+                        hrp.CFrame = getSafeCFrame(desiredFugaPos, CFrame.new(desiredFugaPos))
+ 
+                        setStalkerState(true) 
+ 
+                        stalkConn = RunService.RenderStepped:Connect(stalkLoop)
+                    end)
+                    return  
+                end
+            end
+        end
+    end
+ 
+    stalkConn = RunService.RenderStepped:Connect(stalkLoop)
+end
+ 
+local function startRandomStalk()
+    if stalking then
+        stopStalk()
+    else
+        local nearest = pickNearestPlayer()
+ 
+        if not nearest then
+            stalkRandomBtn.Text = "NO PLAYERS"
+            task.wait(1.5)
+            stalkRandomBtn.Text = "RANDOM"
+            return
+        end
+ 
+        if lastSelectedItem then
+            lastSelectedItem.BackgroundColor3 = DEFAULT_COLOR
+            lastSelectedItem = nil
+            selectedPlayer = nil
+        end
+ 
+        startStalk(nearest)
+ 
+        stalkRandomBtn.Text = "STOP"
+        stalkRandomBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    end
+end
+ 
+-- ========================================================================
+-- NEW: FUNCTIONS: CLICK TP TOOL
+-- ========================================================================
+ 
+local function toggleClickTP()
+    if TPToggle then
+        if TPTool then
+            TPTool:Destroy()
+            TPTool = nil
+        end
+        TPToggle = false
+        clickTPBtn.Text = "CLICK TP"
+        clickTPBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ 
+    else
+        local mouse = player:GetMouse()
+        local tool = Instance.new("Tool")
+        tool.RequiresHandle = false
+        tool.Name = "Tp tool(Equip to Click TP)"
+ 
+        tool.Activated:Connect(function()
+            if destroyed or not hrp then return end 
+ 
+            local desiredPos = mouse.Hit.Position
+            local pos = getSafeCFrame(desiredPos, CFrame.new(desiredPos)) 
+ 
+            hrp.CFrame = pos
+        end)
+ 
+        tool.AncestryChanged:Connect(function()
+            if not tool.Parent or tool.Parent.Name ~= "Backpack" then
+                if TPToggle then
+                    task.spawn(function()
+                        task.wait(0.1)
+                        if tool and not tool.Parent then 
+                             toggleClickTP() 
+                        end
+                    end)
+                end
+            end
+        end)
+ 
+        tool.Parent = player.Backpack
+        TPTool = tool
+        TPToggle = true
+        clickTPBtn.Text = "ACTIVE"
+        clickTPBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    end
+end
+ 
+-- ========================================================================
+-- VI. FUNCTIONS: GUI
+-- ========================================================================
+ 
+local function applySettings()
+    local newFov = tonumber(fovInput.Text)
+    local newFugaMax = tonumber(escapeInput.Text)
+    local newTPMax = tonumber(tpMaxInput.Text)
+    local newTPBehind = tonumber(tpBehindInput.Text)
+ 
+    if newFov and newFov >= 1 and newFov <= 180 then
+        stalkFOVdeg = newFov
+    else
+        fovInput.Text = "?"
+    end
+ 
+    if newFugaMax and newFugaMax >= 1 then
+        fugaMaxDistancia = newFugaMax
+    else
+        escapeInput.Text = "?"
+    end
+ 
+    if newTPMax and newTPMax >= 1 then
+        maxStalkDistance = newTPMax
+    else
+        tpMaxInput.Text = "?"
+    end
+ 
+    if newTPBehind and newTPBehind >= 1 then
+        stalkBehindDistance = newTPBehind
+    else
+        tpBehindInput.Text = "?"
+    end
+ 
+    fovInput.Text = tostring(stalkFOVdeg)
+    escapeInput.Text = tostring(fugaMaxDistancia)
+    tpMaxInput.Text = tostring(maxStalkDistance)
+    tpBehindInput.Text = tostring(stalkBehindDistance)
+ 
+    applyBtn.Text = "SAVED"
+    task.wait(0.8)
+    applyBtn.Text = "APPLY"
+end
+ 
+local function toggleSettings()
+    local isSettingsOpen = settingsFrame.Visible
+ 
+    settingsFrame.Visible = not isSettingsOpen 
+ 
+    for _, element in ipairs(mainElements) do
+        element.Visible = isSettingsOpen 
+    end
+ 
+    configBtn.Visible = isSettingsOpen 
+end
+ 
+local function selectPlayer(pl, item)
+    if selectedPlayer == pl then
+        selectedPlayer = nil
+        if lastSelectedItem then lastSelectedItem.BackgroundColor3 = DEFAULT_COLOR end
+        lastSelectedItem = nil
+        stalkBtn.Text = "STALK"
+        stalkBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        viewTargetBtn.Text = "VIEW"
+        viewTargetBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ 
+    else
+        if lastSelectedItem then
+            lastSelectedItem.BackgroundColor3 = DEFAULT_COLOR
+        end
+ 
+        selectedPlayer = pl
+        lastSelectedItem = item
+        item.BackgroundColor3 = SELECTED_COLOR
+ 
+        stalkBtn.Text = stalking and (stalkTarget == pl and "STOP" or "STALK") or "STALK"
+        stalkBtn.BackgroundColor3 = stalking and (stalkTarget == pl and Color3.fromRGB(50, 50, 50) or Color3.fromRGB(30, 30, 30)) or Color3.fromRGB(30, 30, 30)
+ 
+        viewTargetBtn.Text = viewingTarget and (viewTarget == pl and "STOP" or "VIEW") or "VIEW"
+        viewTargetBtn.BackgroundColor3 = viewingTarget and (viewTarget == pl and Color3.fromRGB(50, 50, 50) or Color3.fromRGB(30, 30, 30)) or Color3.fromRGB(30, 30, 30)
+ 
+        stalkRandomBtn.Text = "RANDOM"
+        stalkRandomBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    end
+end
+ 
+local function createPlayerItem(pl)
+    local item = playerTemplate:Clone()
+    item.Name = pl.Name
+    item.Parent = scrollingFrame
+    item.Visible = true
+ 
+    local nameLabel = item:FindFirstChild("NameLabel")
+    local avatarImage = item:FindFirstChild("Avatar")
+ 
+    nameLabel.Text = string.format("%s\n(%s)", pl.DisplayName, pl.Name)
+ 
+    local thumbType = Enum.ThumbnailType.HeadShot
+    local thumbSize = Enum.ThumbnailSize.Size60x60
+    local content, isReady = Players:GetUserThumbnailAsync(pl.UserId, thumbType, thumbSize)
+ 
+    if isReady then
+        avatarImage.Image = content
+    end
+ 
+    item.MouseButton1Click:Connect(function()
+        selectPlayer(pl, item)
+    end)
+ 
+    if selectedPlayer == pl then
+        lastSelectedItem = item
+        item.BackgroundColor3 = SELECTED_COLOR
+    end
+end
+ 
+local function updatePlayerList()
+    local currentlyStalked = stalkTarget
+    local currentlyViewing = viewTarget
+ 
+    for _, item in ipairs(scrollingFrame:GetChildren()) do
+        if item:IsA("TextButton") then
+            item:Destroy()
+        end
+    end
+ 
+    selectedPlayer = nil
+    lastSelectedItem = nil
+ 
+    local players = Players:GetPlayers()
+    local playerCount = 0
+ 
+    for _, pl in ipairs(players) do
+        if pl ~= player and pl.Character and pl.Character:FindFirstChildOfClass("Humanoid") and pl.Character:FindFirstChildOfClass("Humanoid").Health > 0 then
+ 
+            if pl == currentlyStalked or pl == currentlyViewing then 
+                 selectedPlayer = pl
+            end
+ 
+            createPlayerItem(pl)
+            playerCount = playerCount + 1
+        end
+    end
+ 
+    scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, playerCount * 55) 
+ 
+    if selectedPlayer then
+        for _, item in ipairs(scrollingFrame:GetChildren()) do
+             if item.Name == selectedPlayer.Name then
+                lastSelectedItem = item
+                item.BackgroundColor3 = SELECTED_COLOR
+                break
+             end
+        end
+    end
+ 
+    if stalking and stalkTarget then
+        stalkBtn.Text = "STOP"
+        stalkBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    elseif selectedPlayer then
+        stalkBtn.Text = "STALK"
+        stalkBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    else
+        stalkBtn.Text = "STALK"
+        stalkBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    end
+ 
+    if viewingTarget and viewTarget then
+        viewTargetBtn.Text = "STOP"
+        viewTargetBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    elseif selectedPlayer then
+        viewTargetBtn.Text = "VIEW"
+        viewTargetBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    else
+        viewTargetBtn.Text = "VIEW"
+        viewTargetBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    end
+ 
+    if stalking then
+        stalkRandomBtn.Text = "STOP"
+        stalkRandomBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    else
+        stalkRandomBtn.Text = "RANDOM"
+        stalkRandomBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    end
+ 
+    clickTPBtn.Text = TPToggle and "ACTIVE" or "CLICK TP"
+    clickTPBtn.BackgroundColor3 = TPToggle and Color3.fromRGB(50, 50, 50) or Color3.fromRGB(30, 30, 30)
+end
+ 
+-- ========================================================================
+-- VII. EVENT CONNECTIONS
+-- ========================================================================
+ 
+task.spawn(updatePlayerList) 
+ 
+stalkBtn.MouseButton1Click:Connect(function()
+    if stalking and selectedPlayer == stalkTarget then
+        stopStalk()
+    elseif selectedPlayer then
+        startStalk(selectedPlayer)
+    else
+        stalkBtn.Text = "ERROR"
+        task.wait(1.5)
+        updatePlayerList() 
+    end
+end)
+ 
+viewTargetBtn.MouseButton1Click:Connect(function()
+    if viewingTarget and selectedPlayer == viewTarget then
+        stopView()
+    elseif selectedPlayer then
+        startView(selectedPlayer)
+    else
+        viewTargetBtn.Text = "ERROR"
+        task.wait(1.5)
+        updatePlayerList() 
+    end
+end)
+ 
+stalkRandomBtn.MouseButton1Click:Connect(startRandomStalk)
+refreshBtn.MouseButton1Click:Connect(updatePlayerList)
+clickTPBtn.MouseButton1Click:Connect(toggleClickTP) 
+ 
+configBtn.MouseButton1Click:Connect(toggleSettings) 
+backBtnSettings.MouseButton1Click:Connect(toggleSettings) 
+ 
+applyBtn.MouseButton1Click:Connect(applySettings)
+ 
+local function setupInputListeners(inputField)
+    inputField.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            applySettings()
+        end
+    end)
+end
+ 
+setupInputListeners(fovInput)
+setupInputListeners(escapeInput)
+setupInputListeners(tpMaxInput)
+setupInputListeners(tpBehindInput)
+ 
+destroyBtn.MouseButton1Click:Connect(function()
+    destroyed = true
+    stopStalk()
+    stopView() 
+    if TPTool then TPTool:Destroy() end 
+    gui:Destroy()
+end)
+
+-- ========================================================================
+-- MINIMIZE BUTTON - CONFIGURADO AQUI APÓS TODOS OS ELEMENTOS
+-- ========================================================================
+
+-- Função para animar a mudança de tamanho
+local function animateResize(target, startSize, endSize, duration)
+    local startTime = tick()
+    local connection
+    
+    connection = RunService.Heartbeat:Connect(function()
+        local elapsed = tick() - startTime
+        local progress = math.min(elapsed / duration, 1)
+        
+        local currentX = startSize.X.Scale + (endSize.X.Scale - startSize.X.Scale) * progress
+        local currentY = startSize.Y.Offset + (endSize.Y.Offset - startSize.Y.Offset) * progress
+        
+        target.Size = UDim2.new(currentX, 0, 0, currentY)
+        
+        if progress >= 1 then
+            connection:Disconnect()
+            target.Size = endSize
+        end
+    end)
+end
+
+-- Função para animar mudança de transparência (fade in/out)
+local function animateFade(elements, targetAlpha, duration)
+    local startTime = tick()
+    local startAlpha = {}
+    
+    for i, elem in ipairs(elements) do
+        startAlpha[i] = elem.BackgroundTransparency
+    end
+    
+    local connection
+    connection = RunService.Heartbeat:Connect(function()
+        local elapsed = tick() - startTime
+        local progress = math.min(elapsed / duration, 1)
+        
+        for i, elem in ipairs(elements) do
+            elem.BackgroundTransparency = startAlpha[i] + (targetAlpha - startAlpha[i]) * progress
+        end
+        
+        if progress >= 1 then
+            connection:Disconnect()
+            for _, elem in ipairs(elements) do
+                elem.BackgroundTransparency = targetAlpha
+            end
+        end
+    end)
+end
+
+minimizeBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    
+    if isMinimized then
+        minimizeBtn.Text = "+"
+        
+        -- Animar desaparecimento dos elementos
+        local elementsToFade = {scrollingFrame, viewTargetBtn, stalkBtn, stalkRandomBtn, clickTPBtn, refreshBtn, destroyBtn, configBtn}
+        
+        for _, elem in ipairs(elementsToFade) do
+            elem.Visible = false
+        end
+        settingsFrame.Visible = false
+        
+        -- Animar redimensionamento do frame
+        animateResize(frame, UDim2.new(0, 250, 0, 535), UDim2.new(0, 250, 0, 30), 0.4)
+    else
+        minimizeBtn.Text = "−"
+        
+        -- Animar expansão do frame
+        animateResize(frame, UDim2.new(0, 250, 0, 30), UDim2.new(0, 250, 0, 535), 0.4)
+        
+        -- Mostrar elementos após a animação
+        task.wait(0.4)
+        scrollingFrame.Visible = true
+        viewTargetBtn.Visible = true
+        stalkBtn.Visible = true
+        stalkRandomBtn.Visible = true
+        clickTPBtn.Visible = true
+        refreshBtn.Visible = true
+        destroyBtn.Visible = true
+        configBtn.Visible = true
+    end
+end)
